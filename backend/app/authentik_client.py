@@ -6,14 +6,34 @@ from app.config import settings
 
 class AuthentikClient:
     def __init__(self):
-        self.base_url = settings.AUTHENTIK_URL.rstrip("/")
-        self.token = settings.AUTHENTIK_TOKEN
-        self.verify_ssl = not settings.AUTHENTIK_INSECURE_SKIP_VERIFY
-        self.demo_mode = settings.DEMO_MODE
-
         # In-memory mock store for demo/testing mode
-        if self.demo_mode:
+        self.mock_applications = []
+        self.mock_groups = []
+        self.mock_users = []
+        self.mock_policy_bindings = []
+        self.mock_invites = []
+        if settings.DEMO_MODE:
             self._init_mock_store()
+
+    @property
+    def base_url(self) -> str:
+        return settings.AUTHENTIK_URL.rstrip("/")
+
+    @property
+    def token(self) -> str:
+        return settings.AUTHENTIK_TOKEN
+
+    @property
+    def verify_ssl(self) -> bool:
+        return not settings.AUTHENTIK_INSECURE_SKIP_VERIFY
+
+    @property
+    def demo_mode(self) -> bool:
+        return settings.DEMO_MODE
+
+    @demo_mode.setter
+    def demo_mode(self, val: bool):
+        settings.DEMO_MODE = val
 
     def _get_headers(self) -> Dict[str, str]:
         return {
@@ -23,15 +43,32 @@ class AuthentikClient:
         }
 
     async def _request(self, method: str, endpoint: str, **kwargs) -> Any:
+        if not self.demo_mode:
+            if not self.token or self.token == "your_authentik_api_bearer_token_here":
+                raise ValueError(
+                    "AUTHENTIK_TOKEN is not set in .env. Please generate an API token in Authentik and set AUTHENTIK_TOKEN in .env."
+                )
+
         url = f"{self.base_url}{endpoint}"
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=15.0) as client:
-            response = await client.request(
-                method, url, headers=self._get_headers(), **kwargs
+        try:
+            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=15.0) as client:
+                response = await client.request(
+                    method, url, headers=self._get_headers(), **kwargs
+                )
+                response.raise_for_status()
+                if response.status_code == 204:
+                    return None
+                return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                raise RuntimeError(
+                    f"Authentik API token rejected (HTTP {e.response.status_code}). Verify your token in .env and ensure the service account has admin permissions."
+                )
+            raise RuntimeError(f"Authentik API error ({e.response.status_code}): {e.response.text[:200]}")
+        except httpx.ConnectError:
+            raise RuntimeError(
+                f"Failed to connect to Authentik at '{self.base_url}'. Check your AUTHENTIK_URL in .env and verify the host is reachable."
             )
-            response.raise_for_status()
-            if response.status_code == 204:
-                return None
-            return response.json()
 
     async def _get_all_paginated(self, endpoint: str, params: Optional[Dict] = None) -> List[Dict[str, Any]]:
         """Handles Authentik pagination to retrieve all items."""
@@ -64,14 +101,19 @@ class AuthentikClient:
 
     # ==================== Real API Methods ====================
 
-    async def test_connection(self) -> bool:
+    async def test_connection(self) -> tuple[bool, Optional[str]]:
         if self.demo_mode:
-            return True
+            return True, None
+        if not self.token or self.token == "your_authentik_api_bearer_token_here":
+            return False, "AUTHENTIK_TOKEN is missing or using placeholder in .env"
+
         try:
             res = await self._request("GET", "/api/v3/core/users/me/")
-            return bool(res and "username" in res)
-        except Exception:
-            return False
+            if res and "username" in res:
+                return True, None
+            return False, "Unexpected response from Authentik"
+        except Exception as e:
+            return False, str(e)
 
     async def get_applications(self) -> List[Dict[str, Any]]:
         if self.demo_mode:

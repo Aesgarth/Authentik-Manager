@@ -9,7 +9,7 @@ router = APIRouter(prefix="/api/health", tags=["Health & Stats"])
 
 @router.get("", response_model=HealthResponse)
 async def get_health():
-    is_connected = await authentik_client.test_connection()
+    is_connected, conn_error = await authentik_client.test_connection()
     try:
         matrix = await matrix_service.get_matrix()
         total_users = len(matrix.users)
@@ -29,6 +29,7 @@ async def get_health():
     return HealthResponse(
         status="healthy" if is_connected else "degraded",
         authentik_connected=is_connected,
+        connection_error=conn_error,
         authentik_url=settings.AUTHENTIK_URL,
         demo_mode=settings.DEMO_MODE,
         auth_method=settings.AUTH_METHOD,

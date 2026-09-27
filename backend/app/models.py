@@ -125,6 +125,7 @@ class AuthStatus(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     authentik_connected: bool
+    connection_error: Optional[str] = None
     authentik_url: str
     demo_mode: bool
     auth_method: str

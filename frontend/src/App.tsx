@@ -364,6 +364,24 @@ export const App: React.FC = () => {
         {/* Normal Authenticated View */}
         {(!auth || auth.authenticated || auth.auth_method === 'none') && (
           <>
+            {/* Authentik Connection Error Banner */}
+            {health && !health.authentik_connected && !health.demo_mode && (
+              <div className="mb-6 p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-start gap-3 text-rose-300 shadow-lg">
+                <AlertCircle className="h-5 w-5 text-rose-400 shrink-0 mt-0.5" />
+                <div className="text-xs space-y-1">
+                  <div className="font-semibold text-rose-200">
+                    Failed to connect to Authentik API at <span className="font-mono text-rose-300">{health.authentik_url}</span>
+                  </div>
+                  <p className="text-slate-300 font-mono text-[11px] bg-rose-950/40 p-2 rounded border border-rose-900/50">
+                    {health.connection_error || 'Unable to authenticate with provided API token or host is unreachable.'}
+                  </p>
+                  <p className="text-slate-400 text-[11px] pt-1">
+                    Check your <code className="text-rose-300 bg-rose-950/60 px-1 py-0.5 rounded">.env</code> configuration: ensure <code className="text-rose-300 bg-rose-950/60 px-1 py-0.5 rounded">AUTHENTIK_URL</code> and <code className="text-rose-300 bg-rose-950/60 px-1 py-0.5 rounded">AUTHENTIK_TOKEN</code> are valid and restart the container.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* KPI Cards */}
             <OverviewCards
               health={health}

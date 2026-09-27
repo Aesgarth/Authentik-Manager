@@ -7,34 +7,9 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
-    environment:
-      # --- Authentik Connection ---
-      - AUTHENTIK_URL=https://authentik.yourdomain.local
-      - AUTHENTIK_TOKEN=your_authentik_api_bearer_token_here
-      - AUTHENTIK_INSECURE_SKIP_VERIFY=false
-      - APP_GROUP_PREFIX=App - 
-      - DEFAULT_ENROLLMENT_FLOW=default-enrollment-flow
-
-      # --- Tool Security & Authentication ---
-      # Options: 'none', 'password', 'forward_auth', or 'oidc'
-      - AUTH_METHOD=none
-      - ADMIN_PASSWORD=change_this_admin_password
-      - SECRET_KEY=replace_with_a_long_random_secret_key_32_chars_minimum
-
-      # --- Authentik OIDC (when AUTH_METHOD=oidc) ---
-      # - OIDC_ISSUER_URL=https://authentik.yourdomain.local/application/o/authentik-manager/
-      # - OIDC_CLIENT_ID=your_oidc_client_id
-      # - OIDC_CLIENT_SECRET=your_oidc_client_secret
-      # - OIDC_REDIRECT_URI=https://manager.yourdomain.local/api/auth/oidc/callback
-      # - OIDC_ADMIN_GROUP=authentik Admins
-
-      # --- WhatsApp Messaging (Built-in Baileys Service) ---
-      - WHATSAPP_ENABLED=true
-      - DEFAULT_COUNTRY_CODE=44 # (e.g. 44 for UK, 1 for US/CA)
-
-      # --- Demo Mode ---
-      # Set to 'true' to preview interface with mock data without connecting to Authentik
-      - DEMO_MODE=false
+    # Loads all configuration directly from your .env file
+    env_file:
+      - .env
     volumes:
       - manager-data:/app/data
 

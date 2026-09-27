@@ -73,7 +73,7 @@ export const Header: React.FC<HeaderProps> = ({
               <div className="flex items-center space-x-2 text-xs text-slate-400">
                 <span className="flex items-center gap-1">
                   <span className={`h-2 w-2 rounded-full ${health?.authentik_connected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-                  {health?.authentik_connected ? 'Authentik Online' : 'Connecting...'}
+                  {health?.authentik_connected ? 'Authentik Online' : 'Authentik Offline'}
                 </span>
                 <span>•</span>
                 <span className="truncate max-w-[200px]" title={health?.authentik_url}>

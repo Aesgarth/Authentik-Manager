@@ -67,6 +67,7 @@ export interface WhatsAppStatus {
 export interface HealthStatus {
   status: string;
   authentik_connected: boolean;
+  connection_error?: string | null;
   authentik_url: string;
   demo_mode: boolean;
   auth_method: 'none' | 'password' | 'forward_auth' | 'oidc';

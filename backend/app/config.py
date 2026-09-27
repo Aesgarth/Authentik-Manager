@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env", "../.env", "/app/.env"),
         env_file_encoding="utf-8",
         extra="ignore"
     )
@@ -43,12 +43,9 @@ class Settings(BaseSettings):
     # WhatsApp Integration (via Baileys Microservice)
     WHATSAPP_ENABLED: bool = True
     WHATSAPP_SERVICE_URL: str = "http://127.0.0.1:3001"
+    DEFAULT_COUNTRY_CODE: str = "44"
 
-    # Demo / Mock Mode: allows full UI/feature exploration without live Authentik
+    # Demo Mode: ONLY enabled if explicitly set to true in .env (never auto-enabled)
     DEMO_MODE: bool = False
 
 settings = Settings()
-
-# Auto-enable demo mode if live credentials are not set or placeholder is used
-if (not settings.AUTHENTIK_TOKEN or settings.AUTHENTIK_TOKEN == "your_authentik_api_bearer_token_here" or "yourdomain" in settings.AUTHENTIK_URL or "company" in settings.AUTHENTIK_URL) and not settings.DEMO_MODE:
-    settings.DEMO_MODE = True

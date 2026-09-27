@@ -20,6 +20,13 @@ class GroupSchema(BaseModel):
     is_superuser: bool = False
     users: List[int] = []
 
+class BoundGroupRef(BaseModel):
+    pk: str
+    name: str
+    is_granular_user: bool = False
+    is_granular_admin: bool = False
+    is_admin_group: bool = False
+
 class ApplicationSchema(BaseModel):
     pk: str # UUID
     name: str
@@ -32,15 +39,30 @@ class ApplicationSchema(BaseModel):
     bound_group_pk: Optional[str] = None
     bound_group_name: Optional[str] = None
 
+    # Granular RBAC Groups
+    granular_user_group_pk: Optional[str] = None
+    granular_user_group_name: Optional[str] = None
+    granular_admin_group_pk: Optional[str] = None
+    granular_admin_group_name: Optional[str] = None
+    has_granular_user_group: bool = False
+    has_granular_admin_group: bool = False
+    all_bound_groups: List[BoundGroupRef] = []
+
 # --- Access Matrix Models ---
 
 class AccessMatrixResponse(BaseModel):
     users: List[UserSchema]
     apps: List[ApplicationSchema]
-    # user_pk -> { app_pk: bool }
+    # user_pk -> { app_pk: bool } (True if user has access either direct, admin, or inherited)
     permissions: Dict[str, Dict[str, bool]]
-    # Mapping app_pk -> bound group_pk for fast lookups
+    # user_pk -> { app_pk: bool } (True if user is in granular admin group or is superuser)
+    admin_permissions: Dict[str, Dict[str, bool]] = {}
+    # user_pk -> { app_pk: list of inherited group names e.g. ["5AMT Home"] }
+    inherited_access: Dict[str, Dict[str, List[str]]] = {}
+    # Mapping app_pk -> bound user group_pk for fast lookups
     app_group_map: Dict[str, Optional[str]]
+    # Mapping app_pk -> bound admin group_pk
+    app_admin_group_map: Dict[str, Optional[str]] = {}
 
 class TogglePermissionRequest(BaseModel):
     user_pk: int
@@ -56,10 +78,32 @@ class BulkToggleRequest(BaseModel):
 class ProvisionAppGroupRequest(BaseModel):
     app_pk: str
     group_name: Optional[str] = None # Defaults to "App - {AppName}"
+    create_user_group: bool = True
+    create_admin_group: bool = True
+    custom_user_group_name: Optional[str] = None
+    custom_admin_group_name: Optional[str] = None
+
+class ProvisionAllRequest(BaseModel):
+    create_user_groups: bool = True
+    create_admin_groups: bool = True
+    include_already_secured: bool = True
+
+class ProvisionAppGroupDetail(BaseModel):
+    app_pk: str
+    app_name: str
+    user_group_pk: Optional[str] = None
+    user_group_name: Optional[str] = None
+    user_group_created: bool = False
+    admin_group_pk: Optional[str] = None
+    admin_group_name: Optional[str] = None
+    admin_group_created: bool = False
+    user_binding_created: bool = False
+    admin_binding_created: bool = False
 
 class ProvisionAllUnprotectedResponse(BaseModel):
     provisioned_count: int
     provisioned_apps: List[str]
+    details: List[ProvisionAppGroupDetail] = []
 
 # --- Invitation Models ---
 

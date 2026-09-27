@@ -191,11 +191,12 @@ export const App: React.FC = () => {
   };
 
   // Provisioning
-  const handleProvisionApp = async (appPk: string, customGroupName?: string) => {
+  const handleProvisionApp = async (appPk: string, options?: any) => {
     setLoading(true);
     try {
-      const res = await api.provisionApp(appPk, customGroupName);
-      showToast(`Secured ${res.app_name} with group '${res.group_name}'!`, 'success');
+      const opts = typeof options === 'string' ? { group_name: options } : options;
+      const res = await api.provisionApp(appPk, opts);
+      showToast(`Configured granular groups for ${res.app_name}!`, 'success');
       await loadData();
       return res;
     } catch (err: any) {
@@ -206,11 +207,11 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleProvisionAll = async () => {
+  const handleProvisionAll = async (options?: any) => {
     setLoading(true);
     try {
-      const res = await api.provisionAllUnprotected();
-      showToast(`Secured ${res.provisioned_count} application(s)!`, 'success');
+      const res = await api.provisionAll(options);
+      showToast(`Provisioned granular groups across ${res.provisioned_count} application(s)!`, 'success');
       await loadData();
       return res;
     } catch (err: any) {
@@ -218,6 +219,25 @@ export const App: React.FC = () => {
       throw err;
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleAdminCell = async (user: User, app: Application, currentAdmin: boolean) => {
+    const adminGroupPk = app.granular_admin_group_pk;
+    if (!adminGroupPk) {
+      showToast(`No admin group configured for ${app.name}`, 'error');
+      return;
+    }
+    const newAdmin = !currentAdmin;
+    try {
+      await api.togglePermission(user.pk, app.pk, adminGroupPk, newAdmin);
+      showToast(
+        `${newAdmin ? 'Granted' : 'Revoked'} ${user.name} admin role on ${app.name}`,
+        'info'
+      );
+      await loadData();
+    } catch (err: any) {
+      showToast(err.message, 'error');
     }
   };
 
@@ -403,10 +423,11 @@ export const App: React.FC = () => {
                 stagedMode={stagedMode}
                 stagedChanges={stagedChanges}
                 onToggleCell={handleToggleCell}
+                onToggleAdminCell={handleToggleAdminCell}
                 onApplyStagedChanges={handleApplyStagedChanges}
                 onDiscardStagedChanges={handleDiscardStagedChanges}
                 onToggleUserActive={handleToggleUserActive}
-                onProvisionApp={(appPk) => handleProvisionApp(appPk)}
+                onProvisionApp={() => setIsProvisionModalOpen(true)}
                 loading={loading}
               />
             )}

@@ -109,7 +109,7 @@ class AuthentikClient:
 
         try:
             res = await self._request("GET", "/api/v3/core/users/me/")
-            if res and "username" in res:
+            if isinstance(res, dict) and ("user" in res or "username" in res or "pk" in res):
                 return True, None
             return False, "Unexpected response from Authentik"
         except Exception as e:
@@ -187,6 +187,16 @@ class AuthentikClient:
             "failure_result": False,
         }
         return await self._request("POST", "/api/v3/policies/bindings/", json=payload)
+
+    async def set_app_policy_engine_mode(self, slug_or_pk: str, mode: str = "any") -> bool:
+        """Sets the application's policy engine mode to 'any' (OR logic) or 'all' (AND logic)."""
+        if self.demo_mode:
+            return True
+        try:
+            await self._request("PATCH", f"/api/v3/core/applications/{slug_or_pk}/", json={"policy_engine_mode": mode})
+            return True
+        except Exception:
+            return False
 
     async def add_user_to_group(self, group_pk: str, user_pk: int) -> bool:
         if self.demo_mode:

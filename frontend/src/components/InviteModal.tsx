@@ -36,6 +36,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
   const [expiresInDays, setExpiresInDays] = useState(7);
   const [singleUse, setSingleUse] = useState(true);
   const [selectedApps, setSelectedApps] = useState<Record<string, boolean>>({});
+  const [selectedAdminApps, setSelectedAdminApps] = useState<Record<string, boolean>>({});
   const [createdInvite, setCreatedInvite] = useState<TrackedInvite | null>(null);
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -44,22 +45,27 @@ export const InviteModal: React.FC<InviteModalProps> = ({
   if (!isOpen) return null;
 
   const handleToggleApp = (appPk: string) => {
-    setSelectedApps((prev) => ({
-      ...prev,
-      [appPk]: !prev[appPk],
-    }));
+    setSelectedApps((prev) => {
+      const next = !prev[appPk];
+      if (!next) {
+        // If unchecking app, uncheck admin too
+        setSelectedAdminApps((aPrev) => ({ ...aPrev, [appPk]: false }));
+      }
+      return { ...prev, [appPk]: next };
+    });
   };
 
   const handleSelectAll = () => {
     const all: Record<string, boolean> = {};
     apps.forEach((a) => {
-      if (a.bound_group_pk) all[a.pk] = true;
+      if (a.granular_user_group_pk || a.bound_group_pk) all[a.pk] = true;
     });
     setSelectedApps(all);
   };
 
   const handleClearAll = () => {
     setSelectedApps({});
+    setSelectedAdminApps({});
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -75,10 +81,14 @@ export const InviteModal: React.FC<InviteModalProps> = ({
 
     apps.forEach((a) => {
       if (selectedApps[a.pk]) {
-        const groupPk = a.bound_group_pk || appGroupMap[a.pk];
-        if (groupPk) {
-          targetGroupPks.push(groupPk);
+        const userGroupPk = a.granular_user_group_pk || a.bound_group_pk || appGroupMap[a.pk];
+        if (userGroupPk) {
+          targetGroupPks.push(userGroupPk);
           targetAppNames.push(a.name);
+        }
+        if (selectedAdminApps[a.pk] && a.granular_admin_group_pk) {
+          targetGroupPks.push(a.granular_admin_group_pk);
+          targetAppNames.push(`${a.name} [Admin]`);
         }
       }
     });
@@ -385,14 +395,21 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 max-h-48 overflow-y-auto space-y-1.5 divide-y divide-slate-800/60">
                   {apps.map((app) => {
                     const isChecked = !!selectedApps[app.pk];
+                    const isAdminChecked = !!selectedAdminApps[app.pk];
                     return (
-                      <label
+                      <div
                         key={app.pk}
-                        className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
+                        className={`flex items-center justify-between p-2 rounded-lg transition-colors ${
                           isChecked ? 'bg-indigo-600/10 border border-indigo-500/20' : 'hover:bg-slate-900'
                         }`}
                       >
-                        <div className="flex items-center space-x-2.5">
+                        <label className="flex items-center space-x-2.5 flex-1 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => handleToggleApp(app.pk)}
+                            className="rounded border-slate-800 text-indigo-600 focus:ring-indigo-500 h-4 w-4 bg-slate-950"
+                          />
                           {app.meta_icon ? (
                             <img
                               src={app.meta_icon}
@@ -405,14 +422,27 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                             </div>
                           )}
                           <span className="text-xs font-medium text-slate-200">{app.name}</span>
-                        </div>
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => handleToggleApp(app.pk)}
-                          className="rounded border-slate-800 text-indigo-600 focus:ring-indigo-500 h-4 w-4 bg-slate-950"
-                        />
-                      </label>
+                        </label>
+
+                        {/* Admin Role Checkbox if app has admin group */}
+                        {isChecked && app.granular_admin_group_pk && (
+                          <label className="flex items-center space-x-1.5 cursor-pointer text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded ml-2 select-none">
+                            <input
+                              type="checkbox"
+                              checked={isAdminChecked}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                setSelectedAdminApps((prev) => ({
+                                  ...prev,
+                                  [app.pk]: !prev[app.pk],
+                                }));
+                              }}
+                              className="rounded border-amber-600 text-amber-500 focus:ring-amber-400 h-3.5 w-3.5 bg-slate-950"
+                            />
+                            <span>Admin Role</span>
+                          </label>
+                        )}
+                      </div>
                     );
                   })}
                 </div>

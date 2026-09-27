@@ -33,12 +33,15 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
       </div>
 
       {/* Total Applications */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm flex items-center justify-between">
+      <div
+        onClick={onOpenProvisionModal}
+        className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm flex items-center justify-between cursor-pointer hover:bg-slate-800/50 transition-colors"
+      >
         <div>
           <p className="text-xs font-medium text-slate-400">Configured Services</p>
           <p className="text-2xl font-bold text-white mt-1">{health.total_apps}</p>
-          <p className="text-[11px] text-slate-400 mt-0.5">
-            {health.total_apps - health.unprotected_apps_count} secured with RBAC
+          <p className="text-[11px] text-indigo-400 mt-0.5 hover:underline">
+            Manage granular app groups →
           </p>
         </div>
         <div className="h-12 w-12 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-400">

@@ -8,67 +8,121 @@ class ProvisionerService:
         self,
         app_pk: str,
         custom_group_name: Optional[str] = None,
+        create_user_group: bool = True,
+        create_admin_group: bool = True,
+        custom_user_group_name: Optional[str] = None,
+        custom_admin_group_name: Optional[str] = None,
         actor: str = "Admin"
     ) -> Dict[str, Any]:
         """
-        Ensures a dedicated access group and policy binding exist for an application.
-        Default Deny enforcement: Once bound, only group members can access the app.
+        Provisions dedicated granular access groups (User and/or Admin) and policy bindings
+        for an application. Ensures Authentik uses 'any' policy mode so that bindings to
+        global groups (like 5AMT admin or 5AMT Home) and granular groups work in harmony.
         """
-        # Fetch application
         apps = await authentik_client.get_applications()
         target_app = next((a for a in apps if str(a["pk"]) == str(app_pk)), None)
         if not target_app:
             raise ValueError(f"Application with PK '{app_pk}' not found.")
 
         app_name = target_app.get("name", "Unknown App")
-        group_name = custom_group_name or f"{settings.APP_GROUP_PREFIX}{app_name}"
+        app_slug = target_app.get("slug", "")
 
-        # 1. Check or create the access group
+        user_group_name = custom_user_group_name or custom_group_name or f"{settings.APP_GROUP_PREFIX}{app_name}"
+        admin_group_name = custom_admin_group_name or f"{settings.APP_GROUP_PREFIX}{app_name} Admin"
+
         groups = await authentik_client.get_groups()
-        existing_group = next(
-            (g for g in groups if g["name"].strip().lower() == group_name.strip().lower()),
-            None
-        )
-
-        if existing_group:
-            group_pk = str(existing_group["pk"])
-            group_created = False
-        else:
-            new_group = await authentik_client.create_group(
-                name=group_name,
-                attributes={"managed_by": "authentik-access-manager", "app_pk": app_pk}
-            )
-            group_pk = str(new_group["pk"])
-            group_created = True
-
-        # 2. Check or create the policy binding on the application
         bindings = await authentik_client.get_policy_bindings(target_pk=app_pk)
-        existing_binding = next(
-            (b for b in bindings if str(b.get("group")) == group_pk),
-            None
-        )
 
-        if existing_binding:
-            binding_pk = str(existing_binding["pk"])
-            binding_created = False
-        else:
-            new_binding = await authentik_client.create_policy_binding(
-                target_pk=app_pk,
-                group_pk=group_pk,
-                order=0,
-                negate=False
+        user_group_pk: Optional[str] = None
+        user_group_created = False
+        user_binding_created = False
+
+        admin_group_pk: Optional[str] = None
+        admin_group_created = False
+        admin_binding_created = False
+
+        # 1. Provision User Group
+        if create_user_group:
+            existing_user_group = next(
+                (g for g in groups if g["name"].strip().lower() == user_group_name.strip().lower()),
+                None
             )
-            binding_pk = str(new_binding["pk"])
-            binding_created = True
+            if existing_user_group:
+                user_group_pk = str(existing_user_group["pk"])
+            else:
+                new_grp = await authentik_client.create_group(
+                    name=user_group_name,
+                    attributes={"managed_by": "authentik-access-manager", "app_pk": app_pk, "role": "user"}
+                )
+                user_group_pk = str(new_grp["pk"])
+                user_group_created = True
 
-        # 3. Add admin/superuser user to the group to prevent lockout
+            # Policy binding for user group
+            existing_user_binding = next(
+                (b for b in bindings if str(b.get("group")) == user_group_pk),
+                None
+            )
+            if not existing_user_binding:
+                await authentik_client.create_policy_binding(
+                    target_pk=app_pk,
+                    group_pk=user_group_pk,
+                    order=10,
+                    negate=False
+                )
+                user_binding_created = True
+
+        # 2. Provision Admin Group
+        if create_admin_group:
+            existing_admin_group = next(
+                (g for g in groups if g["name"].strip().lower() == admin_group_name.strip().lower()),
+                None
+            )
+            if existing_admin_group:
+                admin_group_pk = str(existing_admin_group["pk"])
+            else:
+                new_grp = await authentik_client.create_group(
+                    name=admin_group_name,
+                    attributes={"managed_by": "authentik-access-manager", "app_pk": app_pk, "role": "admin"}
+                )
+                admin_group_pk = str(new_grp["pk"])
+                admin_group_created = True
+
+            # Policy binding for admin group
+            existing_admin_binding = next(
+                (b for b in bindings if str(b.get("group")) == admin_group_pk),
+                None
+            )
+            if not existing_admin_binding:
+                await authentik_client.create_policy_binding(
+                    target_pk=app_pk,
+                    group_pk=admin_group_pk,
+                    order=11,
+                    negate=False
+                )
+                admin_binding_created = True
+
+        # 3. Ensure Application Policy Engine Mode is 'any' (OR logic)
+        # This guarantees that existing bindings (e.g. 5AMT admin, 5AMT Home) and new app groups all grant access
+        if app_slug:
+            await authentik_client.set_app_policy_engine_mode(app_slug, "any")
+
+        # 4. Add superusers to newly created groups so admin is not locked out
         users = await authentik_client.get_users()
         superusers = [u for u in users if u.get("is_superuser")]
         for su in superusers:
-            try:
-                await authentik_client.add_user_to_group(group_pk, su["pk"])
-            except Exception:
-                pass
+            for g_pk in [user_group_pk, admin_group_pk]:
+                if g_pk:
+                    try:
+                        await authentik_client.add_user_to_group(g_pk, su["pk"])
+                    except Exception:
+                        pass
+
+        # 5. Audit Log
+        details_list = []
+        if user_group_pk:
+            details_list.append(f"User Group: {user_group_name} ({user_group_pk})")
+        if admin_group_pk:
+            details_list.append(f"Admin Group: {admin_group_name} ({admin_group_pk})")
 
         await audit_service.log(
             actor=actor,
@@ -76,39 +130,95 @@ class ProvisionerService:
             target_type="APPLICATION",
             target_name=app_name,
             target_id=app_pk,
-            details=f"Group: {group_name} ({group_pk}), Binding: {binding_pk}",
+            details=", ".join(details_list),
             status="SUCCESS"
         )
 
         return {
             "app_pk": app_pk,
             "app_name": app_name,
-            "group_pk": group_pk,
-            "group_name": group_name,
-            "group_created": group_created,
-            "binding_created": binding_created,
+            "group_pk": user_group_pk or admin_group_pk,
+            "group_name": user_group_name if user_group_pk else admin_group_name,
+            "group_created": user_group_created or admin_group_created,
+            "binding_created": user_binding_created or admin_binding_created,
+            "user_group_pk": user_group_pk,
+            "user_group_name": user_group_name if create_user_group else None,
+            "user_group_created": user_group_created,
+            "admin_group_pk": admin_group_pk,
+            "admin_group_name": admin_group_name if create_admin_group else None,
+            "admin_group_created": admin_group_created,
+            "user_binding_created": user_binding_created,
+            "admin_binding_created": admin_binding_created,
         }
 
-    async def provision_all_unprotected(self, actor: str = "Admin") -> Dict[str, Any]:
+    async def provision_all_unprotected(
+        self,
+        create_user_groups: bool = True,
+        create_admin_groups: bool = True,
+        include_already_secured: bool = True,
+        actor: str = "Admin"
+    ) -> Dict[str, Any]:
         """
-        Scans all applications and provisions groups + bindings for every application
-        that currently lacks policy bindings (i.e., currently wide open).
+        Provisions missing granular groups across applications.
+        If include_already_secured=True, it also provisions granular User & Admin groups
+        for applications that already have global bindings (e.g. 5AMT admin or 5AMT Home).
         """
         apps = await authentik_client.get_applications()
+        groups = await authentik_client.get_groups()
         bindings = await authentik_client.get_policy_bindings()
 
-        bound_targets = {str(b.get("target")) for b in bindings if b.get("target")}
+        groups_by_name = {g["name"].strip().lower(): g for g in groups}
+        bound_groups_by_app: Dict[str, set] = {}
+        for b in bindings:
+            target = str(b.get("target", ""))
+            grp = str(b.get("group", ""))
+            if target and grp:
+                bound_groups_by_app.setdefault(target, set()).add(grp)
 
-        provisioned = []
+        provisioned_apps = []
+        details = []
+
         for app in apps:
             app_pk = str(app["pk"])
-            if app_pk not in bound_targets:
-                res = await self.provision_app_group(app_pk=app_pk, actor=actor)
-                provisioned.append(res["app_name"])
+            app_name = app.get("name", "Unknown App")
+            bound_set = bound_groups_by_app.get(app_pk, set())
+
+            expected_user_name = f"{settings.APP_GROUP_PREFIX}{app_name}".strip().lower()
+            expected_admin_name = f"{settings.APP_GROUP_PREFIX}{app_name} Admin".strip().lower()
+
+            has_user_group = False
+            if expected_user_name in groups_by_name:
+                u_pk = str(groups_by_name[expected_user_name]["pk"])
+                if u_pk in bound_set:
+                    has_user_group = True
+
+            has_admin_group = False
+            if expected_admin_name in groups_by_name:
+                a_pk = str(groups_by_name[expected_admin_name]["pk"])
+                if a_pk in bound_set:
+                    has_admin_group = True
+
+            needs_user = create_user_groups and not has_user_group
+            needs_admin = create_admin_groups and not has_admin_group
+
+            # If not including already secured, only provision if app had 0 bindings at all
+            if not include_already_secured and len(bound_set) > 0:
+                continue
+
+            if needs_user or needs_admin or len(bound_set) == 0:
+                res = await self.provision_app_group(
+                    app_pk=app_pk,
+                    create_user_group=needs_user or (create_user_groups and len(bound_set) == 0),
+                    create_admin_group=needs_admin or (create_admin_groups and len(bound_set) == 0),
+                    actor=actor
+                )
+                provisioned_apps.append(app_name)
+                details.append(res)
 
         return {
-            "provisioned_count": len(provisioned),
-            "provisioned_apps": provisioned
+            "provisioned_count": len(provisioned_apps),
+            "provisioned_apps": provisioned_apps,
+            "details": details,
         }
 
 provisioner_service = ProvisionerService()

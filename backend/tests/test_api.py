@@ -117,3 +117,36 @@ async def test_whatsapp_status():
         assert response.status_code == 200
         data = response.json()
         assert "status" in data
+
+@pytest.mark.asyncio
+async def test_granular_app_provisioning():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Get apps first
+        apps_res = await client.get("/api/apps")
+        assert apps_res.status_code == 200
+        paperless = next(a for a in apps_res.json() if a["slug"] == "paperless")
+
+        # Provision both granular user group and admin group
+        prov_res = await client.post(
+            "/api/apps/provision",
+            json={
+                "app_pk": paperless["pk"],
+                "create_user_group": True,
+                "create_admin_group": True
+            }
+        )
+        assert prov_res.status_code == 200
+        prov_data = prov_res.json()
+        assert prov_data["user_group_pk"] is not None
+        assert prov_data["admin_group_pk"] is not None
+        assert "Admin" in prov_data["admin_group_name"]
+
+        # Verify matrix reflects both granular groups
+        matrix = (await client.get("/api/matrix")).json()
+        updated_paperless = next(a for a in matrix["apps"] if a["pk"] == paperless["pk"])
+        assert updated_paperless["has_granular_user_group"] is True
+        assert updated_paperless["has_granular_admin_group"] is True
+        assert updated_paperless["granular_user_group_pk"] == prov_data["user_group_pk"]
+        assert updated_paperless["granular_admin_group_pk"] == prov_data["admin_group_pk"]
+

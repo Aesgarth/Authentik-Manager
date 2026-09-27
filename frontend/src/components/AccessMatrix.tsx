@@ -7,8 +7,9 @@ import {
   Lock, 
   UserCheck, 
   UserX,
-  Plus,
-  Minus
+  Plus, 
+  Minus,
+  Crown
 } from 'lucide-react';
 import { AccessMatrixData, User, Application, StagedChange } from '../types';
 
@@ -17,6 +18,7 @@ interface AccessMatrixProps {
   stagedMode: boolean;
   stagedChanges: StagedChange[];
   onToggleCell: (user: User, app: Application, currentAccess: boolean) => void;
+  onToggleAdminCell?: (user: User, app: Application, currentAdmin: boolean) => void;
   onApplyStagedChanges: () => void;
   onDiscardStagedChanges: () => void;
   onToggleUserActive: (user_pk: number) => void;
@@ -29,6 +31,7 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
   stagedMode,
   stagedChanges,
   onToggleCell,
+  onToggleAdminCell,
   onApplyStagedChanges,
   onDiscardStagedChanges,
   onToggleUserActive,
@@ -122,7 +125,7 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
               <button
                 key={cat}
                 onClick={() => setSelectedCategory(cat)}
-                className={`px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
                   selectedCategory === cat
                     ? 'bg-indigo-600 text-white shadow-sm'
                     : 'bg-slate-950/60 text-slate-400 hover:text-slate-200 border border-slate-800'
@@ -134,36 +137,68 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
           </div>
 
           {/* User Type Filter */}
-          <select
-            value={userFilter}
-            onChange={(e) => setUserFilter(e.target.value as any)}
-            className="bg-slate-950/80 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-1.5 focus:outline-none focus:border-indigo-500"
-          >
-            <option value="all">All Users ({data.users.length})</option>
-            <option value="admin">Superusers Only</option>
-            <option value="active">Active Accounts</option>
-            <option value="inactive">Suspended Accounts</option>
-          </select>
+          <div className="flex items-center space-x-1 border-l border-slate-800 pl-2">
+            {(['all', 'admin', 'active', 'inactive'] as const).map((filter) => (
+              <button
+                key={filter}
+                onClick={() => setUserFilter(filter)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-medium capitalize transition-colors ${
+                  userFilter === filter
+                    ? 'bg-slate-800 text-indigo-400 border border-indigo-500/30'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {filter}
+              </button>
+            ))}
+          </div>
 
         </div>
 
       </div>
 
-      {/* Interactive Matrix Table */}
-      <div className="overflow-x-auto relative flex-1">
-        <table className="w-full text-left border-collapse">
+      {/* Staged Changes Notification Bar */}
+      {stagedMode && (
+        <div className="bg-indigo-950/60 border-b border-indigo-500/30 px-6 py-2.5 flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
+            <span className="text-xs font-semibold text-indigo-200">
+              Staged Review Active: <span className="text-amber-300 font-bold">{stagedChanges.length}</span> modification(s) pending commit.
+            </span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={onDiscardStagedChanges}
+              disabled={loading || stagedChanges.length === 0}
+              className="px-3 py-1 text-xs text-slate-400 hover:text-rose-400 disabled:opacity-40 transition-colors"
+            >
+              Discard All
+            </button>
+            <button
+              onClick={onApplyStagedChanges}
+              disabled={loading || stagedChanges.length === 0}
+              className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold px-4 py-1.5 rounded-lg shadow transition-colors flex items-center space-x-1"
+            >
+              <Check className="h-3.5 w-3.5" />
+              <span>Apply Changes ({stagedChanges.length})</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Access Matrix Scrollable Table */}
+      <div className="overflow-x-auto flex-1">
+        <table className="w-full border-collapse text-left">
           
-          {/* Header Row: Applications */}
+          {/* Table Header: Applications */}
           <thead>
-            <tr className="bg-slate-950/90 border-b border-slate-800">
+            <tr className="border-b border-slate-800 bg-slate-950/70">
               
-              {/* Sticky User Column Header */}
-              <th className="sticky left-0 z-20 bg-slate-950/95 backdrop-blur px-4 py-3.5 text-xs font-semibold text-slate-300 border-r border-slate-800 min-w-[260px]">
+              {/* User Identity Column Header */}
+              <th className="sticky left-0 z-20 bg-slate-950/95 backdrop-blur px-4 py-3 text-xs font-semibold text-slate-400 min-w-[220px] border-r border-slate-800">
                 <div className="flex items-center justify-between">
-                  <span>User / Identity</span>
-                  <span className="text-[10px] font-normal text-slate-400">
-                    {filteredUsers.length} shown
-                  </span>
+                  <span>User ({filteredUsers.length})</span>
+                  <span className="text-[10px] text-slate-500">Status</span>
                 </div>
               </th>
 
@@ -171,48 +206,55 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
               {filteredApps.map((app) => (
                 <th
                   key={app.pk}
-                  className="px-4 py-3 text-center min-w-[150px] border-r border-slate-800/60 bg-slate-950/80"
+                  className="px-3 py-3 text-center min-w-[130px] border-r border-slate-800/60 align-top"
                 >
-                  <div className="flex flex-col items-center justify-center space-y-1">
-                    <div className="relative">
+                  <div className="flex flex-col items-center space-y-1">
+                    <div className="relative group/icon">
                       {app.meta_icon ? (
                         <img
                           src={app.meta_icon}
                           alt={app.name}
-                          className="h-7 w-7 rounded-lg object-contain bg-slate-900 p-1 border border-slate-800"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
+                          className="h-7 w-7 rounded-lg object-contain bg-slate-900 p-0.5 border border-slate-800 shadow-sm"
                         />
                       ) : (
-                        <div className="h-7 w-7 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center font-bold text-xs">
+                        <div className="h-7 w-7 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold text-xs border border-indigo-500/20 shadow-sm">
                           {app.name.substring(0, 2).toUpperCase()}
                         </div>
                       )}
-                      {!app.is_protected && (
+                    </div>
+                    <span className="text-xs font-semibold text-slate-200 truncate max-w-[125px]" title={app.name}>
+                      {app.name}
+                    </span>
+                    
+                    {/* Status & Granular Badges */}
+                    <div className="flex flex-wrap items-center justify-center gap-1">
+                      {app.has_granular_user_group ? (
                         <span
-                          title="Unprotected: Accessible to all users in Authentik! Click to secure."
-                          onClick={() => onProvisionApp(app.pk)}
-                          className="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center shadow cursor-pointer hover:scale-110 transition-transform"
+                          className="text-[9px] px-1.5 py-0.2 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium"
+                          title={`Granular Group: ${app.granular_user_group_name || 'Active'}`}
                         >
-                          !
+                          Granular
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => onProvisionApp(app.pk)}
+                          className="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-colors"
+                          title="Click to provision dedicated App - <Name> groups"
+                        >
+                          + Granular
+                        </button>
+                      )}
+
+                      {app.has_granular_admin_group && (
+                        <span
+                          className="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20 font-medium flex items-center gap-0.5"
+                          title={`App Admin: ${app.granular_admin_group_name || 'Active'}`}
+                        >
+                          <Crown className="h-2.5 w-2.5" />
+                          Admin
                         </span>
                       )}
                     </div>
-                    <span className="text-xs font-semibold text-slate-200 truncate max-w-[130px]" title={app.name}>
-                      {app.name}
-                    </span>
-                    <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded-full border ${
-                        app.is_protected
-                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                          : 'bg-rose-500/10 text-rose-400 border-rose-500/20 cursor-pointer hover:bg-rose-500/20'
-                      }`}
-                      onClick={() => !app.is_protected && onProvisionApp(app.pk)}
-                      title={app.bound_group_name ? `Bound Group: ${app.bound_group_name}` : 'Click to provision group'}
-                    >
-                      {app.is_protected ? 'Secured' : 'Open (Click to Lock)'}
-                    </span>
                   </div>
                 </th>
               ))}
@@ -235,6 +277,8 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
               filteredUsers.map((user) => {
                 const uPkStr = String(user.pk);
                 const userPermissions = data.permissions[uPkStr] || {};
+                const userAdminPermissions = data.admin_permissions?.[uPkStr] || {};
+                const userInheritedAccess = data.inherited_access?.[uPkStr] || {};
 
                 return (
                   <tr
@@ -272,7 +316,7 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
                             {user.is_superuser && (
                               <span
                                 title="Superuser (Bypasses all policy bindings)"
-                                className="px-1 py-0.2 rounded text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-0.5"
+                                className="px-1.5 py-0.2 rounded text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-0.5"
                               >
                                 <Shield className="h-2.5 w-2.5" />
                                 Admin
@@ -305,18 +349,20 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
                     {/* Cell for each Application */}
                     {filteredApps.map((app) => {
                       const hasCurrentAccess = user.is_superuser ? true : !!userPermissions[app.pk];
+                      const isCurrentAdmin = user.is_superuser ? true : !!userAdminPermissions[app.pk];
+                      const inheritedGroups = userInheritedAccess[app.pk] || [];
+                      const isInherited = !user.is_superuser && inheritedGroups.length > 0;
+
                       const stagedChange = stagedMap.get(`${user.pk}-${app.pk}`);
-                      
-                      // Calculate effective display state
                       const effectiveAccess = stagedChange ? stagedChange.grant : hasCurrentAccess;
                       const isStagedPending = Boolean(stagedChange);
 
                       return (
                         <td
                           key={app.pk}
-                          className="px-4 py-3 text-center border-r border-slate-800/40 relative"
+                          className="px-3 py-3 text-center border-r border-slate-800/40 relative"
                         >
-                          <div className="flex items-center justify-center">
+                          <div className="flex flex-col items-center justify-center gap-1">
                             
                             {user.is_superuser ? (
                               <div
@@ -325,7 +371,7 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
                               >
                                 <Lock className="h-3.5 w-3.5 text-amber-400" />
                               </div>
-                            ) : !app.bound_group_pk ? (
+                            ) : !app.bound_group_pk && !app.has_granular_user_group ? (
                               <button
                                 onClick={() => onProvisionApp(app.pk)}
                                 title="No dedicated group provisioned yet. Click to secure application."
@@ -334,38 +380,73 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
                                 Secure App
                               </button>
                             ) : (
-                              <button
-                                onClick={() => onToggleCell(user, app, hasCurrentAccess)}
-                                disabled={loading}
-                                className={`relative h-8 w-8 rounded-lg flex items-center justify-center transition-all ${
-                                  isStagedPending
-                                    ? stagedChange?.grant
-                                      ? 'bg-emerald-500/20 text-emerald-300 border-2 border-emerald-400 shadow-md shadow-emerald-500/20 scale-105'
-                                      : 'bg-rose-500/20 text-rose-300 border-2 border-rose-400 shadow-md shadow-rose-500/20 scale-105'
-                                    : effectiveAccess
-                                    ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25'
-                                    : 'bg-slate-950/70 text-slate-600 border border-slate-800 hover:text-slate-400 hover:border-slate-700'
-                                }`}
-                                title={
-                                  isStagedPending
-                                    ? `Staged: ${stagedChange?.grant ? 'Grant' : 'Revoke'} access to ${app.name}`
-                                    : effectiveAccess
-                                    ? `Granted. Click to revoke access to ${app.name}`
-                                    : `Denied. Click to grant access to ${app.name}`
-                                }
-                              >
-                                {isStagedPending ? (
-                                  stagedChange?.grant ? (
-                                    <Plus className="h-4 w-4 text-emerald-400 stroke-[3]" />
+                              <div className="flex items-center gap-1.5">
+                                {/* Standard Member Access Toggle */}
+                                <button
+                                  onClick={() => onToggleCell(user, app, hasCurrentAccess)}
+                                  disabled={loading}
+                                  className={`relative h-8 w-8 rounded-lg flex items-center justify-center transition-all ${
+                                    isStagedPending
+                                      ? stagedChange?.grant
+                                        ? 'bg-emerald-500/20 text-emerald-300 border-2 border-emerald-400 shadow-md shadow-emerald-500/20 scale-105'
+                                        : 'bg-rose-500/20 text-rose-300 border-2 border-rose-400 shadow-md shadow-rose-500/20 scale-105'
+                                      : effectiveAccess
+                                      ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25'
+                                      : 'bg-slate-950/70 text-slate-600 border border-slate-800 hover:text-slate-400 hover:border-slate-700'
+                                  }`}
+                                  title={
+                                    isStagedPending
+                                      ? `Staged: ${stagedChange?.grant ? 'Grant' : 'Revoke'} access to ${app.name}`
+                                      : isInherited
+                                      ? `Access granted via global group '${inheritedGroups.join(', ')}'. Click to toggle individual membership (${app.granular_user_group_name || 'App Group'}).`
+                                      : effectiveAccess
+                                      ? `Member access active. Click to revoke individual access to ${app.name}`
+                                      : `Access denied. Click to grant individual access to ${app.name}`
+                                  }
+                                >
+                                  {isStagedPending ? (
+                                    stagedChange?.grant ? (
+                                      <Plus className="h-4 w-4 text-emerald-400 stroke-[3]" />
+                                    ) : (
+                                      <Minus className="h-4 w-4 text-rose-400 stroke-[3]" />
+                                    )
+                                  ) : effectiveAccess ? (
+                                    <Check className="h-4 w-4 text-emerald-400 stroke-[2.5]" />
                                   ) : (
-                                    <Minus className="h-4 w-4 text-rose-400 stroke-[3]" />
-                                  )
-                                ) : effectiveAccess ? (
-                                  <Check className="h-4 w-4 text-emerald-400 stroke-[2.5]" />
-                                ) : (
-                                  <X className="h-3.5 w-3.5 text-slate-600 group-hover:text-slate-400" />
+                                    <X className="h-3.5 w-3.5 text-slate-600 group-hover:text-slate-400" />
+                                  )}
+                                </button>
+
+                                {/* Granular Admin Role Toggle (if app has granular admin group) */}
+                                {app.granular_admin_group_pk && onToggleAdminCell && (
+                                  <button
+                                    onClick={() => onToggleAdminCell(user, app, isCurrentAdmin)}
+                                    disabled={loading}
+                                    className={`h-7 w-7 rounded-lg flex items-center justify-center transition-all ${
+                                      isCurrentAdmin
+                                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 shadow-sm'
+                                        : 'bg-slate-950/50 text-slate-600 border border-slate-800/80 hover:text-amber-400/80 hover:border-amber-500/30'
+                                    }`}
+                                    title={
+                                      isCurrentAdmin
+                                        ? `App Admin Active (${app.granular_admin_group_name}). Click to revoke admin role.`
+                                        : `Grant App Administrator role (${app.granular_admin_group_name})`
+                                    }
+                                  >
+                                    <Crown className={`h-3.5 w-3.5 ${isCurrentAdmin ? 'text-amber-300' : 'text-slate-600'}`} />
+                                  </button>
                                 )}
-                              </button>
+                              </div>
+                            )}
+
+                            {/* Inherited access badge */}
+                            {isInherited && (
+                              <span
+                                className="text-[9px] text-cyan-400 bg-cyan-950/50 border border-cyan-800/50 px-1 py-0.2 rounded font-mono truncate max-w-[85px]"
+                                title={`Has access via bound group: ${inheritedGroups.join(', ')}`}
+                              >
+                                via {inheritedGroups[0]}
+                              </span>
                             )}
 
                           </div>
@@ -382,42 +463,38 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
         </table>
       </div>
 
-      {/* Staged Changes Confirmation Bar */}
-      {stagedMode && stagedChanges.length > 0 && (
-        <div className="bg-slate-950 border-t border-indigo-500/40 p-4 sticky bottom-0 z-30 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-2">
-          <div className="flex items-center space-x-3">
-            <div className="h-8 w-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow-md">
-              {stagedChanges.length}
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-slate-100">
-                You have {stagedChanges.length} staged permission change{stagedChanges.length > 1 ? 's' : ''} ready to apply.
-              </p>
-              <p className="text-[11px] text-slate-400">
-                Changes will be committed to Authentik policy groups once confirmed.
-              </p>
-            </div>
+      {/* Table Footer: Legend */}
+      <div className="p-3.5 border-t border-slate-800 bg-slate-950/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center space-x-1.5">
+            <span className="h-4 w-4 rounded bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+              <Check className="h-3 w-3 stroke-[2.5]" />
+            </span>
+            <span>Granted (App User)</span>
           </div>
-
-          <div className="flex items-center space-x-2 self-end sm:self-center">
-            <button
-              onClick={onDiscardStagedChanges}
-              disabled={loading}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
-            >
-              Discard All
-            </button>
-            <button
-              onClick={onApplyStagedChanges}
-              disabled={loading}
-              className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-lg shadow-indigo-600/30 transition-all"
-            >
-              <Check className="h-3.5 w-3.5" />
-              <span>{loading ? 'Applying Changes...' : `Commit ${stagedChanges.length} Changes`}</span>
-            </button>
+          <div className="flex items-center space-x-1.5">
+            <span className="h-4 w-4 rounded bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300">
+              <Crown className="h-3 w-3" />
+            </span>
+            <span>App Admin Role</span>
+          </div>
+          <div className="flex items-center space-x-1.5">
+            <span className="text-[9px] text-cyan-400 bg-cyan-950/50 border border-cyan-800/50 px-1.5 py-0.2 rounded font-mono">
+              via Group
+            </span>
+            <span>Inherited (e.g. 5AMT Home)</span>
+          </div>
+          <div className="flex items-center space-x-1.5">
+            <span className="h-4 w-4 rounded bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-600">
+              <X className="h-3 w-3" />
+            </span>
+            <span>Denied</span>
           </div>
         </div>
-      )}
+        <div className="text-[11px] text-slate-500">
+          Tip: Click <Crown className="inline h-3 w-3 text-amber-400 mx-0.5" /> to assign App Admin roles independently.
+        </div>
+      </div>
 
     </div>
   );

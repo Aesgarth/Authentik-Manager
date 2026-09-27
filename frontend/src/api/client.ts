@@ -65,20 +65,52 @@ export const api = {
     return res.json();
   },
 
-  async provisionApp(app_pk: string, group_name?: string): Promise<any> {
+  async provisionApp(
+    app_pk: string,
+    options?: {
+      group_name?: string;
+      create_user_group?: boolean;
+      create_admin_group?: boolean;
+      custom_user_group_name?: string;
+      custom_admin_group_name?: string;
+    }
+  ): Promise<any> {
     const res = await fetch(`${API_BASE}/apps/provision`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app_pk, group_name }),
+      body: JSON.stringify({
+        app_pk,
+        group_name: options?.group_name,
+        create_user_group: options?.create_user_group ?? true,
+        create_admin_group: options?.create_admin_group ?? true,
+        custom_user_group_name: options?.custom_user_group_name,
+        custom_admin_group_name: options?.custom_admin_group_name,
+      }),
     });
     if (!res.ok) throw new Error('Failed to provision app group');
     return res.json();
   },
 
-  async provisionAllUnprotected(): Promise<{ provisioned_count: number; provisioned_apps: string[] }> {
-    const res = await fetch(`${API_BASE}/apps/provision-all`, { method: 'POST' });
-    if (!res.ok) throw new Error('Failed to provision unprotected apps');
+  async provisionAll(options?: {
+    create_user_groups?: boolean;
+    create_admin_groups?: boolean;
+    include_already_secured?: boolean;
+  }): Promise<{ provisioned_count: number; provisioned_apps: string[] }> {
+    const res = await fetch(`${API_BASE}/apps/provision-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        create_user_groups: options?.create_user_groups ?? true,
+        create_admin_groups: options?.create_admin_groups ?? true,
+        include_already_secured: options?.include_already_secured ?? true,
+      }),
+    });
+    if (!res.ok) throw new Error('Failed to provision apps');
     return res.json();
+  },
+
+  async provisionAllUnprotected(): Promise<{ provisioned_count: number; provisioned_apps: string[] }> {
+    return this.provisionAll({ include_already_secured: true });
   },
 
   async toggleUserActive(user_pk: number): Promise<{ is_active: boolean }> {

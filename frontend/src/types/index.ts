@@ -10,6 +10,14 @@ export interface User {
   last_login?: string;
 }
 
+export interface BoundGroupRef {
+  pk: string;
+  name: string;
+  is_granular_user: boolean;
+  is_granular_admin: boolean;
+  is_admin_group: boolean;
+}
+
 export interface Application {
   pk: string;
   name: string;
@@ -21,13 +29,23 @@ export interface Application {
   is_protected: boolean;
   bound_group_pk?: string;
   bound_group_name?: string;
+  granular_user_group_pk?: string;
+  granular_user_group_name?: string;
+  granular_admin_group_pk?: string;
+  granular_admin_group_name?: string;
+  has_granular_user_group: boolean;
+  has_granular_admin_group: boolean;
+  all_bound_groups: BoundGroupRef[];
 }
 
 export interface AccessMatrixData {
   users: User[];
   apps: Application[];
   permissions: Record<string, Record<string, boolean>>; // user_pk -> { app_pk -> bool }
+  admin_permissions?: Record<string, Record<string, boolean>>; // user_pk -> { app_pk -> bool }
+  inherited_access?: Record<string, Record<string, string[]>>; // user_pk -> { app_pk -> string[] }
   app_group_map: Record<string, string | null>;
+  app_admin_group_map?: Record<string, string | null>;
 }
 
 export interface StagedChange {

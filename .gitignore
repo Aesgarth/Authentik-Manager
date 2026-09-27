@@ -1,22 +1,68 @@
-# Environment & Secrets (NEVER COMMIT)
+# ==============================================================================
+# SECRETS, CREDENTIALS & SENSITIVE FILES (CRITICAL: NEVER COMMIT)
+# ==============================================================================
+# Environment files containing live API tokens and passwords
 .env
-.env.local
-.env.*.local
+.env.*
+*.env
+!.env.example
+
+# SSL / TLS Certificates, Private Keys & Tokens
 *.pem
 *.key
+*.crt
+*.cert
+*.pfx
+*.p12
+*.token
 
-# Data & SQLite Database
+# Local Docker overrides with secret mounts or environment overrides
+docker-compose.override.yml
+
+# ==============================================================================
+# PERSISTENT LOCAL DATA & DATABASES
+# ==============================================================================
+# SQLite database files and SQLite WAL / Journal files
 data/
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
 *.sqlite3
+*.sqlite-journal
 manager.db
 
-# WhatsApp Authentication State (Session Keys)
+# WhatsApp Session Data (Baileys Multi-Device Encryption Keys)
+**/whatsapp_auth/
 whatsapp_auth/
 whatsapp-service/data/
+**/*auth_info*
+**/*.session
 
-# Python & Virtual Environments
+# ==============================================================================
+# DEPENDENCIES & BUILD ARTIFACTS (NOT NEEDED IN REPOSITORY)
+# ==============================================================================
+# Node.js dependencies
+**/node_modules/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+package-lock.json.bak
+
+# Frontend & TypeScript build outputs (built dynamically by Docker)
+frontend/dist/
+whatsapp-service/dist/
+**/dist/
+**/build/
+.cache/
+**/.cache/
+
+# Python compiled bytecode, virtual environments & caches
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -41,24 +87,26 @@ wheels/
 .installed.cfg
 *.egg
 .pytest_cache/
+**/.pytest_cache/
 .coverage
 htmlcov/
 
-# Node.js & Frontend Build
-node_modules/
-frontend/node_modules/
-whatsapp-service/node_modules/
-frontend/dist/
-whatsapp-service/dist/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
+# Logs & Debugging
+*.log
+logs/
+**/logs/
 
-# Operating System & IDE
+# ==============================================================================
+# OPERATING SYSTEM & IDE ARTIFACTS
+# ==============================================================================
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+*.tmp
+*.bak

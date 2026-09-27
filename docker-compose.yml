@@ -28,35 +28,16 @@ services:
       # - OIDC_REDIRECT_URI=https://manager.yourdomain.local/api/auth/oidc/callback
       # - OIDC_ADMIN_GROUP=authentik Admins
 
-      # --- WhatsApp Messaging (via Baileys) ---
+      # --- WhatsApp Messaging (Built-in Baileys Service) ---
       - WHATSAPP_ENABLED=true
-      - WHATSAPP_SERVICE_URL=http://whatsapp:3001
+      - DEFAULT_COUNTRY_CODE=44 # (e.g. 44 for UK, 1 for US/CA)
 
       # --- Demo Mode ---
       # Set to 'true' to preview interface with mock data without connecting to Authentik
       - DEMO_MODE=false
     volumes:
       - manager-data:/app/data
-    depends_on:
-      - whatsapp
-
-  whatsapp:
-    build:
-      context: ./whatsapp-service
-      dockerfile: Dockerfile
-    container_name: authentik-whatsapp
-    restart: unless-stopped
-    ports:
-      - "3001:3001"
-    environment:
-      - PORT=3001
-      - DEFAULT_COUNTRY_CODE=44 # Configurable default country prefix (e.g. 44 for UK, 1 for US/CA)
-      - WHATSAPP_AUTH_DIR=/app/data/whatsapp_auth
-    volumes:
-      - whatsapp-data:/app/data/whatsapp_auth
 
 volumes:
   manager-data:
-    driver: local
-  whatsapp-data:
     driver: local

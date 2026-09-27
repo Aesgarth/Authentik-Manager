@@ -120,13 +120,13 @@ To protect this manager using Authentik as the identity provider:
 Authentik Access Manager integrates with **Baileys**, an open-source WhatsApp Web multi-device library, enabling you to deliver invitation links directly to family and friends over WhatsApp without paying for the WhatsApp Business API.
 
 ### 1. Linking your WhatsApp Account
-1. Launch the docker-compose stack. The `whatsapp` service runs on port `3001` alongside `authentik-manager`.
+1. Launch the single container (`docker compose up -d`). Both Authentik Access Manager and the internal WhatsApp Baileys bridge run seamlessly inside the same container under a managed process supervisor.
 2. In the Authentik Access Manager web interface, click the **WhatsApp** / **Link WhatsApp** button in the top navigation bar.
 3. Open WhatsApp on your phone:
    - Go to **Settings** (iOS) or **Three Dots Menu** (Android).
    - Tap **Linked Devices > Link a Device**.
    - Scan the QR code displayed on the screen.
-4. Your account is now linked! Session credentials are encrypted and stored in the persistent `whatsapp-data` volume so you don't need to re-scan when restarting containers.
+4. Your account is now linked! Session credentials are encrypted and stored in the `/app/data/whatsapp_auth` folder in your single `manager-data` volume so you don't need to re-scan when restarting the container.
 
 ### 2. Sending Invitations via WhatsApp
 - When creating an invite in the UI, enter the recipient's phone number (e.g. `+44 7123 456789` or `07123456789`).

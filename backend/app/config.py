@@ -42,7 +42,7 @@ class Settings(BaseSettings):
 
     # WhatsApp Integration (via Baileys Microservice)
     WHATSAPP_ENABLED: bool = True
-    WHATSAPP_SERVICE_URL: str = "http://localhost:3001"
+    WHATSAPP_SERVICE_URL: str = "http://127.0.0.1:3001"
 
     # Demo / Mock Mode: allows full UI/feature exploration without live Authentik
     DEMO_MODE: bool = False

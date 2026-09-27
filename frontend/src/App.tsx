@@ -338,7 +338,6 @@ export const App: React.FC = () => {
         onRefresh={loadData}
         onOpenInviteModal={() => setIsInviteModalOpen(true)}
         onOpenGuideModal={() => setIsGuideModalOpen(true)}
-        onOpenProvisionModal={() => setIsProvisionModalOpen(true)}
         onOpenWhatsAppModal={() => setIsWhatsAppModalOpen(true)}
         onLogout={handleLogout}
         loading={loading}
@@ -428,6 +427,7 @@ export const App: React.FC = () => {
                 onDiscardStagedChanges={handleDiscardStagedChanges}
                 onToggleUserActive={handleToggleUserActive}
                 onProvisionApp={() => setIsProvisionModalOpen(true)}
+                onProvisionAll={handleProvisionAll}
                 loading={loading}
               />
             )}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, Server, ShieldAlert, ShieldCheck, Mail } from 'lucide-react';
+import { Users, Server, ShieldAlert, ShieldCheck, Mail, Sliders } from 'lucide-react';
 import { HealthStatus } from '../types';
 
 interface OverviewCardsProps {
@@ -16,91 +16,59 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   if (!health) return null;
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-      
-      {/* Total Users */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm flex items-center justify-between">
-        <div>
-          <p className="text-xs font-medium text-slate-400">Total Users</p>
-          <p className="text-2xl font-bold text-white mt-1">{health.total_users}</p>
-          <span className="text-[11px] text-emerald-400 flex items-center gap-1 mt-0.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span> Authentik Core
+    <div className="bg-slate-900/70 border border-slate-800 rounded-xl px-4 py-2.5 mb-5 flex flex-wrap items-center justify-between gap-3 text-xs shadow-sm">
+      {/* Metrics Summary Strip */}
+      <div className="flex flex-wrap items-center gap-5 sm:gap-7 text-slate-300">
+        <div className="flex items-center gap-2">
+          <Server className="h-4 w-4 text-indigo-400" />
+          <span>
+            <strong className="text-white font-semibold">{health.total_apps}</strong> Services
           </span>
         </div>
-        <div className="h-12 w-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
-          <Users className="h-6 w-6" />
-        </div>
-      </div>
 
-      {/* Total Applications */}
-      <div
-        onClick={onOpenProvisionModal}
-        className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm flex items-center justify-between cursor-pointer hover:bg-slate-800/50 transition-colors"
-      >
-        <div>
-          <p className="text-xs font-medium text-slate-400">Configured Services</p>
-          <p className="text-2xl font-bold text-white mt-1">{health.total_apps}</p>
-          <p className="text-[11px] text-indigo-400 mt-0.5 hover:underline">
-            Manage granular app groups →
-          </p>
+        <div className="flex items-center gap-2">
+          <Users className="h-4 w-4 text-emerald-400" />
+          <span>
+            <strong className="text-white font-semibold">{health.total_users}</strong> Users
+          </span>
         </div>
-        <div className="h-12 w-12 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-400">
-          <Server className="h-6 w-6" />
-        </div>
-      </div>
 
-      {/* Security Health / Unprotected Apps */}
-      <div
-        onClick={health.unprotected_apps_count > 0 ? onOpenProvisionModal : undefined}
-        className={`border rounded-xl p-4 shadow-sm flex items-center justify-between transition-all ${
-          health.unprotected_apps_count > 0
-            ? 'bg-rose-950/20 border-rose-500/40 cursor-pointer hover:bg-rose-950/30'
-            : 'bg-emerald-950/20 border-emerald-500/30'
-        }`}
-      >
-        <div>
-          <p className="text-xs font-medium text-slate-400">Security Health</p>
-          <p className={`text-2xl font-bold mt-1 ${health.unprotected_apps_count > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-            {health.unprotected_apps_count > 0
-              ? `${health.unprotected_apps_count} Unsecured`
-              : 'All Secured'}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-0.5">
-            {health.unprotected_apps_count > 0
-              ? 'Click to auto-lock with RBAC'
-              : 'Default-deny enforced'}
-          </p>
-        </div>
-        <div
-          className={`h-12 w-12 rounded-xl border flex items-center justify-center ${
-            health.unprotected_apps_count > 0
-              ? 'bg-rose-500/20 border-rose-500/30 text-rose-400 animate-pulse'
-              : 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400'
-          }`}
+        <button
+          onClick={onOpenInviteList}
+          className="flex items-center gap-2 text-slate-300 hover:text-white transition-colors"
         >
+          <Mail className="h-4 w-4 text-amber-400" />
+          <span>
+            <strong className="text-white font-semibold">{health.active_invites_count}</strong> Pending Invites
+          </span>
+        </button>
+
+        <div className="flex items-center gap-1.5 text-[11px]">
           {health.unprotected_apps_count > 0 ? (
-            <ShieldAlert className="h-6 w-6" />
+            <button
+              onClick={onOpenProvisionModal}
+              className="flex items-center gap-1.5 text-rose-300 bg-rose-500/15 border border-rose-500/30 px-2 py-0.5 rounded-full font-medium hover:bg-rose-500/25 transition-colors"
+            >
+              <ShieldAlert className="h-3 w-3 text-rose-400" />
+              <span>{health.unprotected_apps_count} Unsecured Services</span>
+            </button>
           ) : (
-            <ShieldCheck className="h-6 w-6" />
+            <span className="flex items-center gap-1.5 text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
+              <ShieldCheck className="h-3 w-3 text-emerald-400" />
+              <span>Default-Deny Enforced</span>
+            </span>
           )}
         </div>
       </div>
 
-      {/* Pending Invitations */}
-      <div
-        onClick={onOpenInviteList}
-        className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm flex items-center justify-between cursor-pointer hover:bg-slate-800/50 transition-colors"
+      {/* Quick Action Link */}
+      <button
+        onClick={onOpenProvisionModal}
+        className="flex items-center gap-1.5 text-[11px] text-indigo-400 hover:text-indigo-300 font-medium transition-colors ml-auto sm:ml-0"
       >
-        <div>
-          <p className="text-xs font-medium text-slate-400">Pending Invites</p>
-          <p className="text-2xl font-bold text-white mt-1">{health.active_invites_count}</p>
-          <p className="text-[11px] text-slate-400 mt-0.5">Awaiting user registration</p>
-        </div>
-        <div className="h-12 w-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
-          <Mail className="h-6 w-6" />
-        </div>
-      </div>
-
+        <Sliders className="h-3 w-3" />
+        <span>Manage Service Groups</span>
+      </button>
     </div>
   );
 };

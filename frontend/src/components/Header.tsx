@@ -6,11 +6,8 @@ import {
   Layers, 
   FileText, 
   BookOpen, 
-  CheckSquare, 
-  Zap, 
   LogOut, 
   LogIn,
-  Sliders,
   MessageSquare
 } from 'lucide-react';
 import { HealthStatus, AuthStatus, WhatsAppStatus } from '../types';
@@ -26,7 +23,6 @@ interface HeaderProps {
   onRefresh: () => void;
   onOpenInviteModal: () => void;
   onOpenGuideModal: () => void;
-  onOpenProvisionModal: () => void;
   onOpenWhatsAppModal: () => void;
   onLogout: () => void;
   loading: boolean;
@@ -43,7 +39,6 @@ export const Header: React.FC<HeaderProps> = ({
   onRefresh,
   onOpenInviteModal,
   onOpenGuideModal,
-  onOpenProvisionModal,
   onOpenWhatsAppModal,
   onLogout,
   loading,
@@ -129,51 +124,49 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center space-x-3">
             
             {/* Staged vs Instant Mode Toggle */}
-            <div className="hidden lg:flex items-center bg-slate-950/60 border border-slate-800 rounded-lg p-0.5 text-xs">
+            <div className="hidden lg:flex items-center bg-slate-950/80 border border-slate-800 rounded-lg p-0.5 text-xs">
               <button
                 onClick={() => setStagedMode(false)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors ${
+                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
                   !stagedMode
-                    ? 'bg-amber-500/20 text-amber-300 font-medium border border-amber-500/30'
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
-                title="Changes apply to Authentik immediately when toggled"
+                title="Immediate mode: changes apply to Authentik instantly"
               >
-                <Zap className="h-3 w-3 text-amber-400" />
-                <span>Instant</span>
+                Instant
               </button>
               <button
                 onClick={() => setStagedMode(true)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors ${
+                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
                   stagedMode
-                    ? 'bg-indigo-600 text-white font-medium shadow-sm'
+                    ? 'bg-indigo-600 text-white shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
-                title="Review and confirm all permission changes before applying"
+                title="Staged mode: review multiple changes before applying"
               >
-                <CheckSquare className="h-3 w-3" />
-                <span>Staged</span>
+                Staged
               </button>
             </div>
 
-            {/* Quick Actions */}
+            {/* WhatsApp Link Pill */}
             <button
               onClick={onOpenWhatsAppModal}
-              className={`flex items-center space-x-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-colors ${
+              className={`flex items-center space-x-1.5 text-xs px-2.5 py-1 rounded-lg border transition-colors ${
                 whatsAppStatus?.status === 'connected'
                   ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/20'
                   : whatsAppStatus?.status === 'qr_ready'
                   ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 hover:bg-amber-500/20 animate-pulse'
-                  : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                  : 'bg-slate-950/50 text-slate-400 border-slate-800 hover:bg-slate-800 hover:text-slate-200'
               }`}
               title={
                 whatsAppStatus?.status === 'connected'
                   ? `WhatsApp Linked (+${whatsAppStatus.phone})`
-                  : 'Configure WhatsApp Bridge'
+                  : 'Pair WhatsApp for Invites'
               }
             >
-              <MessageSquare className="h-3.5 w-3.5 text-emerald-400" />
-              <span className="hidden sm:inline">
+              <MessageSquare className="h-3 w-3 text-emerald-400" />
+              <span className="hidden sm:inline text-[11px]">
                 {whatsAppStatus?.status === 'connected' ? 'WhatsApp' : 'Link WhatsApp'}
               </span>
               <span
@@ -187,38 +180,32 @@ export const Header: React.FC<HeaderProps> = ({
               />
             </button>
 
-            <button
-              onClick={onOpenInviteModal}
-              className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-sm transition-colors"
-            >
-              <UserPlus className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Invite User</span>
-            </button>
-
-            <button
-              onClick={onOpenProvisionModal}
-              className="flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-700 transition-colors"
-              title="Auto-provision App Groups & Policy Bindings"
-            >
-              <Sliders className="h-3.5 w-3.5 text-indigo-400" />
-              <span className="hidden sm:inline">Provision Apps</span>
-            </button>
-
-            <button
-              onClick={onOpenGuideModal}
-              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
-              title="Authentik Setup Guide & Expression Policy"
-            >
-              <BookOpen className="h-4 w-4" />
-            </button>
-
+            {/* Refresh Button */}
             <button
               onClick={onRefresh}
               disabled={loading}
               className={`p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors ${loading ? 'animate-spin text-indigo-400' : ''}`}
               title="Refresh Matrix"
             >
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+
+            {/* Setup Guide Icon */}
+            <button
+              onClick={onOpenGuideModal}
+              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+              title="Authentik Setup Guide & Expression Policy"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+            </button>
+
+            {/* Primary Action: Invite User */}
+            <button
+              onClick={onOpenInviteModal}
+              className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-1.5 rounded-xl shadow transition-colors"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              <span>Invite</span>
             </button>
 
             {/* User / Auth Info */}

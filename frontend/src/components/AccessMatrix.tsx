@@ -1,14 +1,16 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { 
   Search, 
   Check, 
   Lock, 
   UserCheck, 
   UserX,
-  Plus, 
-  Minus,
   Crown,
-  Sparkles
+  Sparkles,
+  X,
+  CheckCircle2,
+  XCircle,
+  Flag
 } from 'lucide-react';
 import { AccessMatrixData, User, Application, StagedChange } from '../types';
 
@@ -16,8 +18,7 @@ interface AccessMatrixProps {
   data: AccessMatrixData;
   stagedMode: boolean;
   stagedChanges: StagedChange[];
-  onToggleCell: (user: User, app: Application, currentAccess: boolean) => void;
-  onToggleAdminCell?: (user: User, app: Application, currentAdmin: boolean) => void;
+  onSetRole: (user: User, app: Application, newRole: 'none' | 'member' | 'admin') => void;
   onApplyStagedChanges: () => void;
   onDiscardStagedChanges: () => void;
   onToggleUserActive: (user_pk: number) => void;
@@ -26,12 +27,19 @@ interface AccessMatrixProps {
   loading: boolean;
 }
 
+interface ActivePopover {
+  user: User;
+  app: Application;
+  rect: DOMRect;
+  currentRole: 'none' | 'member' | 'admin' | 'inherited';
+  inheritedGroups: string[];
+}
+
 export const AccessMatrix: React.FC<AccessMatrixProps> = ({
   data,
   stagedMode,
   stagedChanges,
-  onToggleCell,
-  onToggleAdminCell,
+  onSetRole,
   onApplyStagedChanges,
   onDiscardStagedChanges,
   onToggleUserActive,
@@ -43,6 +51,30 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [userFilter, setUserFilter] = useState<'all' | 'admin' | 'active' | 'inactive'>('all');
   const [provisioningAll, setProvisioningAll] = useState(false);
+  const [popover, setPopover] = useState<ActivePopover | null>(null);
+
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  // Close popover on outside click or escape key
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setPopover(null);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPopover(null);
+    };
+
+    if (popover) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [popover]);
 
   // Check how many apps lack granular groups
   const appsNeedingGranular = useMemo(() => {
@@ -86,11 +118,14 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
     });
   }, [data.users, searchQuery, userFilter]);
 
-  // Fast staged change lookup: `${user_pk}-${app_pk}` -> StagedChange
+  // Fast staged change lookup: `${user_pk}-${app_pk}` -> StagedChange[]
   const stagedMap = useMemo(() => {
-    const map = new Map<string, StagedChange>();
+    const map = new Map<string, StagedChange[]>();
     stagedChanges.forEach((sc) => {
-      map.set(`${sc.user_pk}-${sc.app_pk}`, sc);
+      const key = `${sc.user_pk}-${sc.app_pk}`;
+      const list = map.get(key) || [];
+      list.push(sc);
+      map.set(key, list);
     });
     return map;
   }, [stagedChanges]);
@@ -109,61 +144,88 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
     }
   };
 
+  const handleCellClick = (
+    e: React.MouseEvent<HTMLButtonElement>,
+    user: User,
+    app: Application,
+    currentRole: 'none' | 'member' | 'admin' | 'inherited',
+    inheritedGroups: string[]
+  ) => {
+    if (user.is_superuser) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setPopover({
+      user,
+      app,
+      rect,
+      currentRole,
+      inheritedGroups,
+    });
+  };
+
+  const handleSelectRole = (newRole: 'none' | 'member' | 'admin') => {
+    if (!popover) return;
+    onSetRole(popover.user, popover.app, newRole);
+    setPopover(null);
+  };
+
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden flex flex-col">
+    <div className="bg-[#111827] border border-[#25354b] rounded-2xl shadow-xl overflow-hidden flex flex-col">
       
-      {/* 1-Click Granular RBAC Setup Callout (Only appears if broad groups are in use) */}
+      {/* 1-Click Granular RBAC Setup Callout (PatternFly Enterprise style) */}
       {appsNeedingGranular.length > 0 && onProvisionAll && (
-        <div className="bg-gradient-to-r from-indigo-950/70 via-slate-900 to-slate-900 border-b border-indigo-500/30 px-5 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-          <div className="flex items-center space-x-2.5 text-slate-300">
-            <div className="h-7 w-7 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0">
+        <div className="bg-[#16202e] border-b border-[#25354b] px-5 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center space-x-3 text-slate-300">
+            <div className="h-8 w-8 rounded-lg bg-orange-500/15 text-[#fd7e14] border border-orange-500/30 flex items-center justify-center shrink-0">
               <Sparkles className="h-4 w-4" />
             </div>
             <div>
-              <p className="font-semibold text-indigo-200">
-                Granular Per-Service Groups Available
+              <p className="font-semibold text-white flex items-center gap-1.5">
+                <span>Granular Per-Service Groups Available</span>
+                <span className="text-[11px] font-normal px-2 py-0.2 rounded-full bg-orange-500/10 text-[#fd7e14] border border-orange-500/20">
+                  PatternFly RBAC
+                </span>
               </p>
-              <p className="text-[11px] text-slate-400">
-                {appsNeedingGranular.length} of your services currently share global groups. Set up individual access and admin groups with 1 click.
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {appsNeedingGranular.length} services currently rely on global groups. Set up individual Member & Admin groups with 1 click.
               </p>
             </div>
           </div>
           <button
             onClick={handleQuickProvisionAll}
             disabled={loading || provisioningAll}
-            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold px-3.5 py-1.5 rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5 shrink-0"
+            className="bg-[#fd7e14] hover:bg-[#ea6c0a] disabled:opacity-50 text-white font-semibold px-4 py-1.5 rounded-lg transition-all shadow-sm flex items-center justify-center gap-1.5 shrink-0"
           >
             <Sparkles className="h-3.5 w-3.5" />
-            <span>{provisioningAll ? 'Setting up...' : `Auto-Setup All (${appsNeedingGranular.length})`}</span>
+            <span>{provisioningAll ? 'Configuring Groups...' : `Auto-Setup All (${appsNeedingGranular.length})`}</span>
           </button>
         </div>
       )}
 
       {/* Matrix Controls & Search Toolbar */}
-      <div className="p-3.5 border-b border-slate-800/80 bg-slate-900/60 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+      <div className="p-3.5 border-b border-[#25354b] bg-[#16202e]/60 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         
         {/* Search */}
         <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-500" />
+          <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
           <input
             type="text"
-            placeholder="Search users..."
+            placeholder="Search users or applications..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+            className="w-full bg-[#0b0f17] border border-[#25354b] rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14] transition-colors"
           />
         </div>
 
-        {/* Clean Filter Pills */}
+        {/* Filter Pills */}
         <div className="flex flex-wrap items-center gap-2">
           {/* Category Filter */}
           <div className="flex items-center space-x-1 overflow-x-auto py-0.5">
             <button
               onClick={() => setSelectedCategory('all')}
-              className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
                 selectedCategory === 'all'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                  ? 'bg-[#fd7e14] text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-[#1e2c3f]'
               }`}
             >
               All ({data.apps.length})
@@ -172,10 +234,10 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
               <button
                 key={cat}
                 onClick={() => setSelectedCategory(cat)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all whitespace-nowrap ${
                   selectedCategory === cat
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                    ? 'bg-[#fd7e14] text-white shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-[#1e2c3f]'
                 }`}
               >
                 {cat}
@@ -184,15 +246,15 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
           </div>
 
           {/* User Status Filter */}
-          <div className="flex items-center space-x-1 border-l border-slate-800 pl-2">
+          <div className="flex items-center space-x-1 border-l border-[#25354b] pl-2">
             {(['all', 'admin', 'active'] as const).map((filter) => (
               <button
                 key={filter}
                 onClick={() => setUserFilter(filter)}
-                className={`px-2 py-1 rounded-lg text-[11px] font-medium capitalize transition-colors ${
+                className={`px-2 py-1 rounded-md text-[11px] font-medium capitalize transition-colors ${
                   userFilter === filter
-                    ? 'bg-slate-800 text-indigo-400 font-semibold'
-                    : 'text-slate-500 hover:text-slate-300'
+                    ? 'bg-[#1e2c3f] text-[#fd7e14] font-semibold border border-[#2c3f58]'
+                    : 'text-slate-400 hover:text-slate-300'
                 }`}
               >
                 {filter}
@@ -205,11 +267,11 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
 
       {/* Staged Changes Notification Bar */}
       {stagedMode && (
-        <div className="bg-indigo-950/60 border-b border-indigo-500/30 px-5 py-2 flex items-center justify-between">
+        <div className="bg-[#16202e] border-b border-orange-500/30 px-5 py-2 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
-            <span className="text-xs font-semibold text-indigo-200">
-              Staged Review: <span className="text-amber-300 font-bold">{stagedChanges.length}</span> change(s) ready to apply.
+            <span className="h-2 w-2 rounded-full bg-[#fd7e14] animate-ping" />
+            <span className="text-xs font-semibold text-slate-200">
+              Staged Review: <span className="text-[#fd7e14] font-bold">{stagedChanges.length}</span> change(s) queued.
             </span>
           </div>
           <div className="flex items-center space-x-2">
@@ -223,10 +285,10 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
             <button
               onClick={onApplyStagedChanges}
               disabled={loading || stagedChanges.length === 0}
-              className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold px-3 py-1 rounded-lg shadow transition-colors flex items-center space-x-1"
+              className="bg-[#fd7e14] hover:bg-[#ea6c0a] disabled:opacity-40 text-white text-xs font-semibold px-3 py-1 rounded-md shadow transition-colors flex items-center space-x-1"
             >
               <Check className="h-3 w-3" />
-              <span>Apply</span>
+              <span>Apply Changes</span>
             </button>
           </div>
         </div>
@@ -238,42 +300,45 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
           
           {/* Table Header: Applications */}
           <thead>
-            <tr className="border-b border-slate-800/80 bg-slate-950/70">
+            <tr className="border-b border-[#25354b] bg-[#16202e]">
               
               {/* User Identity Column Header */}
-              <th className="sticky left-0 z-20 bg-slate-950/95 backdrop-blur px-4 py-3 text-xs font-semibold text-slate-400 min-w-[210px] border-r border-slate-800/80">
-                <span>User ({filteredUsers.length})</span>
+              <th className="sticky left-0 z-20 bg-[#16202e] px-4 py-3.5 text-xs font-semibold text-slate-300 min-w-[220px] border-r border-[#25354b]">
+                <div className="flex items-center justify-between">
+                  <span>Users ({filteredUsers.length})</span>
+                  <span className="text-[10px] text-slate-500 font-mono">Role Status</span>
+                </div>
               </th>
 
               {/* Application Columns */}
               {filteredApps.map((app) => (
                 <th
                   key={app.pk}
-                  className="px-2.5 py-2.5 text-center min-w-[110px] border-r border-slate-800/50 align-top"
+                  className="px-3 py-3 text-center min-w-[125px] border-r border-[#25354b]/70 align-top"
                 >
                   <div className="flex flex-col items-center justify-center space-y-1">
                     {app.meta_icon ? (
                       <img
                         src={app.meta_icon}
                         alt={app.name}
-                        className="h-6 w-6 rounded object-contain bg-slate-900 p-0.5 border border-slate-800"
+                        className="h-6 w-6 rounded object-contain bg-[#0b0f17] p-0.5 border border-[#25354b]"
                       />
                     ) : (
-                      <div className="h-6 w-6 rounded bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold text-[10px] border border-indigo-500/20">
+                      <div className="h-6 w-6 rounded bg-[#1e2c3f] text-[#fd7e14] flex items-center justify-center font-bold text-[10px] border border-[#2c3f58]">
                         {app.name.substring(0, 2).toUpperCase()}
                       </div>
                     )}
-                    <span 
-                      className="text-xs font-semibold text-slate-200 truncate max-w-[105px] flex items-center justify-center gap-1"
+                    <div 
+                      className="text-xs font-semibold text-slate-200 truncate max-w-[115px] flex items-center justify-center gap-1"
                       title={app.name}
                     >
-                      <span>{app.name}</span>
+                      <span className="truncate">{app.name}</span>
                       {app.has_granular_admin_group && (
                         <span title="Configured with dedicated App Admin group">
-                          <Crown className="h-2.5 w-2.5 text-amber-400 shrink-0" />
+                          <Crown className="h-3 w-3 text-[#fd7e14] shrink-0" />
                         </span>
                       )}
-                    </span>
+                    </div>
                   </div>
                 </th>
               ))}
@@ -282,12 +347,12 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
           </thead>
 
           {/* Table Body: User Rows */}
-          <tbody className="divide-y divide-slate-800/60">
+          <tbody className="divide-y divide-[#25354b]/50">
             {filteredUsers.length === 0 ? (
               <tr>
                 <td
                   colSpan={filteredApps.length + 1}
-                  className="px-6 py-12 text-center text-slate-500 text-xs"
+                  className="px-6 py-14 text-center text-slate-400 text-xs bg-[#0b0f17]/40"
                 >
                   No users matched your filter criteria.
                 </td>
@@ -302,42 +367,42 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
                 return (
                   <tr
                     key={user.pk}
-                    className="hover:bg-slate-800/25 transition-colors group"
+                    className="hover:bg-[#16202e]/40 transition-colors group"
                   >
                     
-                    {/* User Identity Column (Sticky) */}
-                    <td className="sticky left-0 z-10 bg-slate-900/95 backdrop-blur px-4 py-2.5 border-r border-slate-800/80">
+                    {/* User Identity Column (Sticky Left) */}
+                    <td className="sticky left-0 z-10 bg-[#111827] group-hover:bg-[#131b27] px-4 py-2.5 border-r border-[#25354b] transition-colors">
                       <div className="flex items-center space-x-2.5">
                         <div className="relative shrink-0">
                           {user.avatar ? (
                             <img
                               src={user.avatar}
                               alt={user.name}
-                              className="h-7 w-7 rounded-full border border-slate-700 object-cover"
+                              className="h-7 w-7 rounded-full border border-[#25354b] object-cover"
                             />
                           ) : (
-                            <div className="h-7 w-7 rounded-full bg-slate-800 text-slate-300 font-bold text-[10px] flex items-center justify-center border border-slate-700">
+                            <div className="h-7 w-7 rounded-full bg-[#1e2c3f] text-slate-200 font-bold text-[10px] flex items-center justify-center border border-[#2c3f58]">
                               {user.name.substring(0, 2).toUpperCase()}
                             </div>
                           )}
                           <span
-                            className={`absolute bottom-0 right-0 h-1.5 w-1.5 rounded-full border border-slate-900 ${
-                              user.is_active ? 'bg-emerald-500' : 'bg-slate-500'
+                            className={`absolute bottom-0 right-0 h-2 w-2 rounded-full border-2 border-[#111827] ${
+                              user.is_active ? 'bg-emerald-400' : 'bg-slate-500'
                             }`}
                           />
                         </div>
 
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center space-x-1.5">
-                            <span className="text-xs font-semibold text-slate-200 truncate max-w-[120px]">
+                            <span className="text-xs font-semibold text-slate-200 truncate max-w-[125px]">
                               {user.name}
                             </span>
                             {user.is_superuser && (
                               <span
-                                title="Superuser (Global Access)"
-                                className="px-1 py-0.2 rounded text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium"
+                                title="Authentik Superuser (Unrestricted Access)"
+                                className="px-1.5 py-0.2 rounded text-[9px] bg-orange-500/15 text-[#fd7e14] border border-orange-500/30 font-semibold"
                               >
-                                Admin
+                                Superuser
                               </span>
                             )}
                           </div>
@@ -346,17 +411,17 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
                           </div>
                         </div>
 
-                        {/* Account Suspend / Activate */}
+                        {/* Account Suspend / Activate Button */}
                         {!user.is_superuser && (
                           <button
                             onClick={() => onToggleUserActive(user.pk)}
                             title={user.is_active ? 'Suspend Account' : 'Activate Account'}
-                            className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-slate-300 transition-opacity"
+                            className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-[#1e2c3f] text-slate-400 hover:text-slate-200 transition-opacity"
                           >
                             {user.is_active ? (
-                              <UserCheck className="h-3 w-3 text-emerald-400" />
+                              <UserCheck className="h-3.5 w-3.5 text-emerald-400" />
                             ) : (
-                              <UserX className="h-3 w-3 text-rose-400" />
+                              <UserX className="h-3.5 w-3.5 text-rose-400" />
                             )}
                           </button>
                         )}
@@ -366,110 +431,135 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
 
                     {/* Cell for each Application */}
                     {filteredApps.map((app) => {
-                      const hasCurrentAccess = user.is_superuser ? true : !!userPermissions[app.pk];
-                      const isCurrentAdmin = user.is_superuser ? true : !!userAdminPermissions[app.pk];
+                      // Determine current permissions
+                      const isSuperuser = user.is_superuser;
+                      const hasAdmin = isSuperuser ? true : !!userAdminPermissions[app.pk];
+                      const hasAccess = isSuperuser ? true : !!userPermissions[app.pk];
                       const inheritedGroups = userInheritedAccess[app.pk] || [];
-                      const isInherited = !user.is_superuser && inheritedGroups.length > 0;
+                      const isInherited = !isSuperuser && inheritedGroups.length > 0;
 
-                      const stagedChange = stagedMap.get(`${user.pk}-${app.pk}`);
-                      const effectiveAccess = stagedChange ? stagedChange.grant : hasCurrentAccess;
-                      const isStagedPending = Boolean(stagedChange);
+                      // Check direct group membership
+                      const userGroupPk = app.granular_user_group_pk || app.bound_group_pk;
+                      const adminGroupPk = app.granular_admin_group_pk;
+                      const isDirectMember = Boolean(userGroupPk && user.groups.includes(userGroupPk));
+                      const isDirectAdmin = Boolean(adminGroupPk && user.groups.includes(adminGroupPk));
+
+                      // Current effective role
+                      let currentRole: 'none' | 'member' | 'admin' | 'inherited' = 'none';
+                      if (hasAdmin || isDirectAdmin) {
+                        currentRole = 'admin';
+                      } else if (isDirectMember) {
+                        currentRole = 'member';
+                      } else if (isInherited) {
+                        currentRole = 'inherited';
+                      } else if (hasAccess) {
+                        currentRole = 'member';
+                      }
+
+                      // Check staged changes
+                      const appStaged = stagedMap.get(`${user.pk}-${app.pk}`) || [];
+                      const isStagedPending = appStaged.length > 0;
+                      let stagedPreviewRole: 'none' | 'member' | 'admin' | null = null;
+                      if (isStagedPending) {
+                        const adminStaged = appStaged.find(s => s.group_pk === adminGroupPk);
+                        const userStaged = appStaged.find(s => s.group_pk === userGroupPk);
+                        if (adminStaged?.grant) {
+                          stagedPreviewRole = 'admin';
+                        } else if (userStaged?.grant) {
+                          stagedPreviewRole = 'member';
+                        } else if (userStaged?.grant === false && adminStaged?.grant === false) {
+                          stagedPreviewRole = 'none';
+                        } else if (userStaged?.grant === false) {
+                          stagedPreviewRole = 'none';
+                        }
+                      }
+
+                      const effectiveRole = stagedPreviewRole || currentRole;
 
                       return (
                         <td
                           key={app.pk}
-                          className="px-2 py-2 text-center border-r border-slate-800/40 relative"
+                          className="px-2 py-2 text-center border-r border-[#25354b]/50 relative"
                         >
-                          <div className="flex items-center justify-center relative group/cell">
+                          <div className="flex items-center justify-center">
                             
-                            {user.is_superuser ? (
+                            {isSuperuser ? (
                               <div
-                                title="Superuser has inherent full access to all services"
-                                className="h-7 w-7 rounded-lg bg-amber-500/10 text-amber-400/80 border border-amber-500/20 flex items-center justify-center cursor-default"
+                                title="Superuser has unrestricted access to all applications"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-orange-500/10 text-[#fd7e14] border border-orange-500/20 cursor-default select-none"
                               >
-                                <Lock className="h-3 w-3 text-amber-400" />
+                                <Lock className="h-3 w-3 text-[#fd7e14]" />
+                                <span>Superuser</span>
                               </div>
                             ) : !app.bound_group_pk && !app.has_granular_user_group ? (
                               <button
                                 onClick={() => onProvisionApp(app.pk)}
-                                title="No group bound yet. Click to secure application."
-                                className="px-2 py-0.5 rounded bg-slate-800/60 hover:bg-slate-700 text-[10px] text-amber-400 border border-amber-500/30 transition-colors"
+                                title="Application is unrestricted or unconfigured. Click to secure."
+                                className="px-2.5 py-1 rounded-md bg-[#1e2c3f] hover:bg-[#25354b] text-[11px] font-medium text-amber-400 border border-amber-500/30 transition-colors"
                               >
-                                Setup
+                                + Setup
                               </button>
                             ) : (
-                              <div className="relative">
-                                {/* Single Clean Access Button */}
-                                <button
-                                  onClick={() => onToggleCell(user, app, hasCurrentAccess)}
-                                  disabled={loading}
-                                  className={`relative h-7 w-7 rounded-lg flex items-center justify-center transition-all ${
-                                    isStagedPending
-                                      ? stagedChange?.grant
-                                        ? 'bg-emerald-500/20 text-emerald-300 border-2 border-emerald-400 shadow-sm scale-105'
-                                        : 'bg-rose-500/20 text-rose-300 border-2 border-rose-400 shadow-sm scale-105'
-                                      : isCurrentAdmin
-                                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
-                                      : effectiveAccess
-                                      ? isInherited
-                                        ? 'bg-sky-500/15 text-sky-400 border border-sky-500/30 hover:bg-sky-500/25'
-                                        : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25'
-                                      : 'bg-slate-950/40 text-slate-600 border border-slate-800/70 hover:text-slate-300 hover:border-slate-700 hover:bg-slate-800/40'
-                                  }`}
-                                  title={
-                                    isStagedPending
-                                      ? `Staged: ${stagedChange?.grant ? 'Grant' : 'Revoke'} access to ${app.name}`
-                                      : isCurrentAdmin
-                                      ? `App Administrator (${app.name}). Click to toggle access.`
-                                      : isInherited
-                                      ? `Granted via broad group '${inheritedGroups.join(', ')}'. Click to toggle dedicated membership.`
-                                      : effectiveAccess
-                                      ? `Member access active. Click to revoke.`
-                                      : `No access. Click to grant.`
-                                  }
-                                >
-                                  {isStagedPending ? (
-                                    stagedChange?.grant ? (
-                                      <Plus className="h-3.5 w-3.5 text-emerald-400 stroke-[3]" />
-                                    ) : (
-                                      <Minus className="h-3.5 w-3.5 text-rose-400 stroke-[3]" />
-                                    )
-                                  ) : isCurrentAdmin ? (
-                                    <Crown className="h-3.5 w-3.5 text-amber-300" />
-                                  ) : effectiveAccess ? (
-                                    <Check className={`h-3.5 w-3.5 stroke-[2.5] ${isInherited ? 'text-sky-400' : 'text-emerald-400'}`} />
-                                  ) : (
-                                    <span className="text-slate-600 group-hover/cell:text-slate-400 text-xs select-none">—</span>
-                                  )}
-
-                                  {/* Small subtle corner dot for inherited access */}
-                                  {isInherited && !isCurrentAdmin && !isStagedPending && (
-                                    <span 
-                                      className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-sky-400 border border-slate-900" 
-                                      title={`Inherited from: ${inheritedGroups.join(', ')}`}
-                                    />
-                                  )}
-                                </button>
-
-                                {/* Hoverable Quick Crown Toggle for Admin Role (only if app has admin group) */}
-                                {app.granular_admin_group_pk && onToggleAdminCell && !user.is_superuser && (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      onToggleAdminCell(user, app, isCurrentAdmin);
-                                    }}
-                                    disabled={loading}
-                                    title={isCurrentAdmin ? 'Revoke App Admin role' : 'Grant App Admin role'}
-                                    className={`absolute -top-1.5 -right-1.5 p-0.5 rounded-full border shadow-sm transition-all ${
-                                      isCurrentAdmin
-                                        ? 'bg-amber-500 text-slate-950 border-amber-300 opacity-100 scale-100'
-                                        : 'bg-slate-800 text-slate-400 border-slate-700 opacity-0 group-hover/cell:opacity-100 hover:text-amber-300 hover:border-amber-400 hover:scale-110'
-                                    }`}
-                                  >
-                                    <Crown className="h-2.5 w-2.5" />
-                                  </button>
+                              /* Clean Role Badge Pill */
+                              <button
+                                onClick={(e) => handleCellClick(e, user, app, currentRole, inheritedGroups)}
+                                disabled={loading}
+                                className={`group/pill relative inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold transition-all select-none ${
+                                  isStagedPending
+                                    ? stagedPreviewRole === 'admin'
+                                      ? 'bg-orange-500/20 text-[#fd7e14] border-2 border-orange-400 shadow-md animate-pulse'
+                                      : stagedPreviewRole === 'member'
+                                      ? 'bg-emerald-500/20 text-emerald-300 border-2 border-emerald-400 shadow-md animate-pulse'
+                                      : 'bg-rose-500/20 text-rose-300 border-2 border-rose-400 shadow-md animate-pulse'
+                                    : effectiveRole === 'admin'
+                                    ? 'bg-orange-500/15 text-[#fd7e14] border border-orange-500/30 hover:bg-orange-500/25 shadow-sm'
+                                    : effectiveRole === 'member'
+                                    ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25 shadow-sm'
+                                    : effectiveRole === 'inherited'
+                                    ? 'bg-[#0284c7]/15 text-[#38bdf8] border border-[#0284c7]/30 hover:bg-[#0284c7]/25 shadow-sm'
+                                    : 'text-slate-500 hover:text-slate-200 hover:bg-[#1e2c3f] border border-transparent hover:border-[#2c3f58]'
+                                }`}
+                                title={
+                                  isStagedPending
+                                    ? `Staged change pending: ${stagedPreviewRole?.toUpperCase()}`
+                                    : effectiveRole === 'admin'
+                                    ? `Administrator (${app.name}). Click to change role.`
+                                    : effectiveRole === 'member'
+                                    ? `Member (${app.name}). Click to change role.`
+                                    : effectiveRole === 'inherited'
+                                    ? `Access inherited via ${inheritedGroups.join(', ')}. Click to configure individual role.`
+                                    : `No access to ${app.name}. Click to assign role.`
+                                }
+                              >
+                                {effectiveRole === 'admin' ? (
+                                  <>
+                                    <Crown className="h-3.5 w-3.5 text-[#fd7e14] shrink-0" />
+                                    <span>Admin</span>
+                                  </>
+                                ) : effectiveRole === 'member' ? (
+                                  <>
+                                    <Check className="h-3.5 w-3.5 text-emerald-400 stroke-[2.5] shrink-0" />
+                                    <span>Member</span>
+                                  </>
+                                ) : effectiveRole === 'inherited' ? (
+                                  <>
+                                    <Flag className="h-3 w-3 text-[#38bdf8] shrink-0" />
+                                    <span>Inherited</span>
+                                  </>
+                                ) : (
+                                  <span className="text-slate-500 group-hover/pill:text-slate-300 text-xs px-1">
+                                    —
+                                  </span>
                                 )}
-                              </div>
+
+                                {/* Subtle corner indicator for inherited access if also an individual member */}
+                                {isInherited && effectiveRole !== 'inherited' && !isStagedPending && (
+                                  <span
+                                    className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-[#0284c7] border border-[#111827]"
+                                    title={`Also inherited from: ${inheritedGroups.join(', ')}`}
+                                  />
+                                )}
+                              </button>
                             )}
 
                           </div>
@@ -487,42 +577,161 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
       </div>
 
       {/* Clean Table Footer: Legend */}
-      <div className="px-4 py-2.5 border-t border-slate-800/80 bg-slate-950/80 flex flex-wrap items-center justify-between gap-3 text-[11px] text-slate-400">
-        <div className="flex flex-wrap items-center gap-4 sm:gap-6">
-          <div className="flex items-center space-x-1.5">
-            <span className="h-3.5 w-3.5 rounded bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-              <Check className="h-2.5 w-2.5 stroke-[3]" />
+      <div className="px-4 py-3 border-t border-[#25354b] bg-[#16202e] flex flex-wrap items-center justify-between gap-3 text-[11px] text-slate-400">
+        <div className="flex flex-wrap items-center gap-5 sm:gap-6">
+          <div className="flex items-center space-x-2">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+              <Check className="h-3 w-3 text-emerald-400 stroke-[2.5]" />
+              <span>Member</span>
             </span>
-            <span>Member Access</span>
+            <span>Standard app access</span>
           </div>
 
-          <div className="flex items-center space-x-1.5">
-            <span className="h-3.5 w-3.5 rounded bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300">
-              <Crown className="h-2.5 w-2.5" />
+          <div className="flex items-center space-x-2">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-orange-500/15 text-[#fd7e14] border border-orange-500/30">
+              <Crown className="h-3 w-3 text-[#fd7e14]" />
+              <span>Admin</span>
             </span>
-            <span>App Admin Role</span>
+            <span>Dedicated app admin group</span>
           </div>
 
-          <div className="flex items-center space-x-1.5">
-            <span className="h-3.5 w-3.5 rounded bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400 relative">
-              <Check className="h-2.5 w-2.5 stroke-[3]" />
-              <span className="absolute -top-0.5 -right-0.5 h-1 w-1 rounded-full bg-sky-400" />
+          <div className="flex items-center space-x-2">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-[#0284c7]/15 text-[#38bdf8] border border-[#0284c7]/30">
+              <Flag className="h-3 w-3 text-[#38bdf8]" />
+              <span>Inherited</span>
             </span>
-            <span>Inherited Access (e.g. 5AMT Home)</span>
+            <span>Granted via global group (e.g. 5AMT Home)</span>
           </div>
 
-          <div className="flex items-center space-x-1.5">
-            <span className="h-3.5 w-3.5 rounded bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-600 text-xs">
+          <div className="flex items-center space-x-2">
+            <span className="inline-flex items-center justify-center px-2 py-0.5 rounded text-xs text-slate-400 border border-[#25354b] bg-[#0b0f17]">
               —
             </span>
-            <span>No Access</span>
+            <span>No access</span>
           </div>
         </div>
 
-        <div className="text-slate-500">
-          Click cell to toggle access • Hover to toggle admin role
+        <div className="text-slate-400 flex items-center gap-1.5 font-medium">
+          <Sparkles className="h-3.5 w-3.5 text-[#fd7e14]" />
+          <span>Click any role badge to change access level</span>
         </div>
       </div>
+
+      {/* Floating Role Selector Popover (Anchored at clicked cell) */}
+      {popover && (
+        <div
+          ref={popoverRef}
+          style={{
+            position: 'fixed',
+            top: Math.min(window.innerHeight - 280, Math.max(10, popover.rect.bottom + 6)),
+            left: Math.min(window.innerWidth - 290, Math.max(10, popover.rect.left - 40)),
+            zIndex: 100,
+          }}
+          className="w-72 bg-[#16202e] border border-[#2c3f58] rounded-xl shadow-2xl p-3.5 text-xs animate-in fade-in zoom-in-95 duration-100"
+        >
+          {/* Popover Header */}
+          <div className="flex items-start justify-between pb-2.5 mb-2.5 border-b border-[#25354b]">
+            <div>
+              <div className="flex items-center space-x-1.5 font-bold text-white text-sm">
+                <span>{popover.app.name}</span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Role for <strong className="text-slate-200">{popover.user.name}</strong>
+              </p>
+            </div>
+            <button
+              onClick={() => setPopover(null)}
+              className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-[#1e2c3f] transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* Role Options */}
+          <div className="space-y-1.5">
+            
+            {/* 1. None / No Access */}
+            <button
+              onClick={() => handleSelectRole('none')}
+              className={`w-full flex items-center justify-between p-2 rounded-lg text-left transition-all ${
+                popover.currentRole === 'none'
+                  ? 'bg-[#1e2c3f] border border-[#2c3f58] text-white'
+                  : 'hover:bg-[#1e2c3f]/60 text-slate-300'
+              }`}
+            >
+              <div className="flex items-center space-x-2.5">
+                <XCircle className="h-4 w-4 text-slate-400" />
+                <div>
+                  <div className="font-semibold text-xs">No Access</div>
+                  <div className="text-[10px] text-slate-400">Revoke individual app access</div>
+                </div>
+              </div>
+              {popover.currentRole === 'none' && (
+                <CheckCircle2 className="h-4 w-4 text-slate-300 shrink-0" />
+              )}
+            </button>
+
+            {/* 2. Member */}
+            <button
+              onClick={() => handleSelectRole('member')}
+              className={`w-full flex items-center justify-between p-2 rounded-lg text-left transition-all ${
+                popover.currentRole === 'member'
+                  ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-200'
+                  : 'hover:bg-[#1e2c3f]/60 text-slate-300'
+              }`}
+            >
+              <div className="flex items-center space-x-2.5">
+                <Check className="h-4 w-4 text-emerald-400 stroke-[2.5]" />
+                <div>
+                  <div className="font-semibold text-xs text-white">Member</div>
+                  <div className="text-[10px] text-slate-400">
+                    {popover.app.granular_user_group_name || 'Standard user group'}
+                  </div>
+                </div>
+              </div>
+              {popover.currentRole === 'member' && (
+                <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+              )}
+            </button>
+
+            {/* 3. Administrator */}
+            <button
+              onClick={() => handleSelectRole('admin')}
+              className={`w-full flex items-center justify-between p-2 rounded-lg text-left transition-all ${
+                popover.currentRole === 'admin'
+                  ? 'bg-orange-500/15 border border-orange-500/30 text-orange-200'
+                  : 'hover:bg-[#1e2c3f]/60 text-slate-300'
+              }`}
+            >
+              <div className="flex items-center space-x-2.5">
+                <Crown className="h-4 w-4 text-[#fd7e14]" />
+                <div>
+                  <div className="font-semibold text-xs text-white">Administrator</div>
+                  <div className="text-[10px] text-slate-400">
+                    {popover.app.granular_admin_group_name || (popover.app.has_granular_admin_group ? 'App Admin group' : 'Auto-provisions Admin group')}
+                  </div>
+                </div>
+              </div>
+              {popover.currentRole === 'admin' && (
+                <CheckCircle2 className="h-4 w-4 text-[#fd7e14] shrink-0" />
+              )}
+            </button>
+
+          </div>
+
+          {/* Inherited Access Info (if applicable) */}
+          {popover.inheritedGroups.length > 0 && (
+            <div className="mt-3 pt-2.5 border-t border-[#25354b] text-[10px] text-sky-300/90 bg-[#0284c7]/10 p-2 rounded-md border border-[#0284c7]/20 flex items-start gap-1.5">
+              <Flag className="h-3.5 w-3.5 text-[#38bdf8] shrink-0 mt-0.5" />
+              <div>
+                <span>User also has base access inherited from: </span>
+                <span className="font-semibold text-white">{popover.inheritedGroups.join(', ')}</span>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
 
     </div>
   );

@@ -60,13 +60,13 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
   const isOffline = status?.status === 'service_offline';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+      <div className="bg-[#111827] border border-[#25354b] rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         
         {/* Header */}
-        <div className="p-5 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center space-x-2.5">
-            <div className="h-9 w-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+        <div className="p-5 border-b border-[#25354b] bg-[#16202e] flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="h-9 w-9 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center">
               <MessageSquare className="h-5 w-5" />
             </div>
             <div>
@@ -78,7 +78,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
                       ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
                       : isQrReady
                       ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 animate-pulse'
-                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                      : 'bg-[#1e2c3f] text-slate-400 border-[#2c3f58]'
                   }`}
                 >
                   {isConnected ? 'Connected' : isQrReady ? 'Scan QR Code' : isOffline ? 'Service Offline' : 'Connecting'}
@@ -92,7 +92,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
           <div className="flex items-center space-x-1">
             <button
               onClick={handleRefresh}
-              className={`p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors ${
+              className={`p-1.5 text-slate-400 hover:text-white hover:bg-[#1e2c3f] rounded-lg transition-colors ${
                 refreshing ? 'animate-spin text-emerald-400' : ''
               }`}
               title="Refresh status"
@@ -101,7 +101,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
             </button>
             <button
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-[#1e2c3f] rounded-lg transition-colors"
             >
               <X className="h-5 w-5" />
             </button>
@@ -118,7 +118,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
               <div>
                 <p className="font-semibold text-amber-200">WhatsApp Service Offline</p>
                 <p className="text-[11px] text-amber-300/80 mt-1">
-                  The Baileys bridge container is not reachable at port 3001. Ensure the <code className="text-white">whatsapp</code> service is running in your <code className="text-white">docker-compose.yml</code>.
+                  The Baileys bridge container is not reachable at port 3001. Ensure the container is active.
                 </p>
               </div>
             </div>
@@ -127,7 +127,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
           {/* Connected View */}
           {isConnected && (
             <div className="space-y-4">
-              <div className="bg-slate-950 border border-emerald-500/30 rounded-xl p-4 flex items-center justify-between">
+              <div className="bg-[#0b0f17] border border-emerald-500/30 rounded-xl p-4 flex items-center justify-between">
                 <div className="flex items-center space-x-3">
                   <div className="h-10 w-10 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-bold">
                     <Smartphone className="h-5 w-5" />
@@ -147,7 +147,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
 
                 <button
                   onClick={onLogout}
-                  className="flex items-center space-x-1.5 bg-slate-800 hover:bg-rose-950/60 text-slate-300 hover:text-rose-400 text-xs px-3 py-2 rounded-xl border border-slate-700 hover:border-rose-500/30 transition-colors"
+                  className="flex items-center space-x-1.5 bg-[#16202e] hover:bg-rose-950/60 text-slate-300 hover:text-rose-400 text-xs px-3 py-2 rounded-lg border border-[#25354b] hover:border-rose-500/30 transition-colors"
                   title="Unlink and pair a different phone"
                 >
                   <LogOut className="h-3.5 w-3.5" />
@@ -156,7 +156,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
               </div>
 
               {/* Test Message Box */}
-              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+              <div className="bg-[#0b0f17] border border-[#25354b] rounded-xl p-4 space-y-3">
                 <h4 className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
                   <Send className="h-3.5 w-3.5 text-emerald-400" />
                   <span>Send Test Message</span>
@@ -184,7 +184,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
                       placeholder="+44 7123 456789"
                       value={testRecipient}
                       onChange={(e) => setTestRecipient(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono"
+                      className="w-full bg-[#111827] border border-[#25354b] rounded-lg px-3 py-1.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono"
                       required
                     />
                   </div>
@@ -197,7 +197,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
                       rows={2}
                       value={testMessage}
                       onChange={(e) => setTestMessage(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500"
+                      className="w-full bg-[#111827] border border-[#25354b] rounded-lg p-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500"
                       required
                     />
                   </div>
@@ -218,7 +218,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
           {/* QR Code Scan View */}
           {isQrReady && (
             <div className="text-center space-y-4 py-2">
-              <div className="bg-white p-3 rounded-2xl inline-block shadow-xl border border-slate-800">
+              <div className="bg-white p-3 rounded-2xl inline-block shadow-xl border border-slate-700">
                 <img
                   src={status.qrCodeDataUrl!}
                   alt="WhatsApp QR Code"
@@ -226,8 +226,8 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
                 />
               </div>
 
-              <div className="text-left bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2">
-                <h4 className="text-xs font-semibold text-slate-200">How to Pair with Your Phone:</h4>
+              <div className="text-left bg-[#0b0f17] border border-[#25354b] rounded-xl p-3.5 space-y-2">
+                <h4 className="text-xs font-semibold text-white">How to Pair with Your Phone:</h4>
                 <ol className="list-decimal pl-4 space-y-1 text-slate-400 text-[11px]">
                   <li>Open <strong>WhatsApp</strong> on your phone.</li>
                   <li>Tap <strong>Settings</strong> (iPhone) or <strong>Three Dots Menu</strong> (Android).</li>
@@ -254,10 +254,10 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900/50 flex justify-end">
+        <div className="p-4 border-t border-[#25354b] bg-[#16202e] flex justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors"
+            className="px-4 py-2 rounded-lg text-xs font-medium text-slate-300 hover:bg-[#1e2c3f] transition-colors"
           >
             Close
           </button>

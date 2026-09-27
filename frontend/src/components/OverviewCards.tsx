@@ -16,11 +16,11 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   if (!health) return null;
 
   return (
-    <div className="bg-slate-900/70 border border-slate-800 rounded-xl px-4 py-2.5 mb-5 flex flex-wrap items-center justify-between gap-3 text-xs shadow-sm">
-      {/* Metrics Summary Strip */}
+    <div className="bg-[#111827] border border-[#25354b] rounded-xl px-4 py-2.5 mb-5 flex flex-wrap items-center justify-between gap-3 text-xs shadow-sm">
+      {/* PatternFly Metrics Summary Strip */}
       <div className="flex flex-wrap items-center gap-5 sm:gap-7 text-slate-300">
         <div className="flex items-center gap-2">
-          <Server className="h-4 w-4 text-indigo-400" />
+          <Server className="h-4 w-4 text-[#fd7e14]" />
           <span>
             <strong className="text-white font-semibold">{health.total_apps}</strong> Services
           </span>
@@ -47,26 +47,26 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
           {health.unprotected_apps_count > 0 ? (
             <button
               onClick={onOpenProvisionModal}
-              className="flex items-center gap-1.5 text-rose-300 bg-rose-500/15 border border-rose-500/30 px-2 py-0.5 rounded-full font-medium hover:bg-rose-500/25 transition-colors"
+              className="flex items-center gap-1.5 text-rose-300 bg-rose-500/15 border border-rose-500/30 px-2.5 py-0.5 rounded-full font-medium hover:bg-rose-500/25 transition-colors"
             >
-              <ShieldAlert className="h-3 w-3 text-rose-400" />
+              <ShieldAlert className="h-3.5 w-3.5 text-rose-400" />
               <span>{health.unprotected_apps_count} Unsecured Services</span>
             </button>
           ) : (
-            <span className="flex items-center gap-1.5 text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
-              <ShieldCheck className="h-3 w-3 text-emerald-400" />
+            <span className="flex items-center gap-1.5 text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full font-medium">
+              <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
               <span>Default-Deny Enforced</span>
             </span>
           )}
         </div>
       </div>
 
-      {/* Quick Action Link */}
+      {/* Quick Action Button */}
       <button
         onClick={onOpenProvisionModal}
-        className="flex items-center gap-1.5 text-[11px] text-indigo-400 hover:text-indigo-300 font-medium transition-colors ml-auto sm:ml-0"
+        className="flex items-center gap-1.5 text-xs text-[#fd7e14] hover:text-orange-400 font-medium transition-colors ml-auto sm:ml-0 bg-[#16202e] hover:bg-[#1e2c3f] border border-[#25354b] px-2.5 py-1 rounded-lg"
       >
-        <Sliders className="h-3 w-3" />
+        <Sliders className="h-3.5 w-3.5" />
         <span>Manage Service Groups</span>
       </button>
     </div>

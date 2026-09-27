@@ -48,7 +48,6 @@ export const InviteModal: React.FC<InviteModalProps> = ({
     setSelectedApps((prev) => {
       const next = !prev[appPk];
       if (!next) {
-        // If unchecking app, uncheck admin too
         setSelectedAdminApps((aPrev) => ({ ...aPrev, [appPk]: false }));
       }
       return { ...prev, [appPk]: next };
@@ -75,7 +74,6 @@ export const InviteModal: React.FC<InviteModalProps> = ({
       return;
     }
 
-    // Collect target groups and app names
     const targetGroupPks: string[] = [];
     const targetAppNames: string[] = [];
 
@@ -135,13 +133,13 @@ export const InviteModal: React.FC<InviteModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+      <div className="bg-[#111827] border border-[#25354b] rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         
         {/* Modal Header */}
-        <div className="p-5 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center space-x-2.5">
-            <div className="h-9 w-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center">
+        <div className="p-5 border-b border-[#25354b] bg-[#16202e] flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="h-9 w-9 rounded-lg bg-orange-500/15 border border-orange-500/30 text-[#fd7e14] flex items-center justify-center">
               <UserPlus className="h-5 w-5" />
             </div>
             <div>
@@ -153,7 +151,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
           </div>
           <button
             onClick={handleReset}
-            className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-[#1e2c3f] rounded-lg transition-colors"
           >
             <X className="h-5 w-5" />
           </button>
@@ -171,25 +169,25 @@ export const InviteModal: React.FC<InviteModalProps> = ({
           {createdInvite ? (
             /* Success View: Display generated link */
             <div className="space-y-4 text-center py-2">
-              <div className="h-12 w-12 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 mx-auto flex items-center justify-center">
+              <div className="h-12 w-12 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 mx-auto flex items-center justify-center">
                 <Check className="h-6 w-6" />
               </div>
               <div>
                 <h4 className="text-base font-semibold text-white">Invitation Link Created!</h4>
                 <p className="text-xs text-slate-400 mt-1">
-                  Send this link to <span className="text-indigo-400 font-medium">{createdInvite.name}</span>.
+                  Send this link to <span className="text-[#fd7e14] font-medium">{createdInvite.name}</span>.
                   Once they sign up, they will automatically receive access to their pre-configured services.
                 </p>
               </div>
 
               {/* URL Box */}
-              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between text-left">
+              <div className="bg-[#0b0f17] border border-[#25354b] rounded-xl p-3 flex items-center justify-between text-left">
                 <div className="truncate mr-2 font-mono text-xs text-slate-300">
                   {createdInvite.invite_url}
                 </div>
                 <button
                   onClick={handleCopyLink}
-                  className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1.5 rounded-lg shadow transition-colors flex-shrink-0"
+                  className="flex items-center space-x-1.5 bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs px-3 py-1.5 rounded-lg shadow transition-colors flex-shrink-0"
                 >
                   {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                   <span>{copied ? 'Copied!' : 'Copy'}</span>
@@ -225,7 +223,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
 
               {/* Pre-assigned Apps Summary */}
               {createdInvite.assigned_apps.length > 0 && (
-                <div className="text-left bg-slate-950/50 border border-slate-800/80 rounded-xl p-3">
+                <div className="text-left bg-[#0b0f17]/50 border border-[#25354b]/80 rounded-xl p-3">
                   <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
                     Pre-Assigned Services ({createdInvite.assigned_apps.length})
                   </p>
@@ -233,7 +231,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                     {createdInvite.assigned_apps.map((app) => (
                       <span
                         key={app}
-                        className="px-2.5 py-1 rounded-md text-xs font-medium bg-indigo-500/10 text-indigo-300 border border-indigo-500/20"
+                        className="px-2.5 py-1 rounded-md text-xs font-medium bg-orange-500/10 text-[#fd7e14] border border-orange-500/20"
                       >
                         {app}
                       </span>
@@ -245,7 +243,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
               <div className="pt-2">
                 <button
                   onClick={handleReset}
-                  className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium py-2 rounded-xl border border-slate-700 transition-colors"
+                  className="w-full bg-[#16202e] hover:bg-[#1e2c3f] text-slate-200 text-xs font-medium py-2.5 rounded-lg border border-[#25354b] transition-colors"
                 >
                   Done
                 </button>
@@ -258,14 +256,14 @@ export const InviteModal: React.FC<InviteModalProps> = ({
               {/* Recipient Name */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Recipient Name / Label <span className="text-rose-400">*</span>
+                  Recipient Name / Note <span className="text-rose-400">*</span>
                 </label>
                 <input
                   type="text"
                   placeholder="e.g. John Doe (Brother) or Family Guest"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-[#0b0f17] border border-[#25354b] rounded-lg px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14]"
                   required
                 />
               </div>
@@ -283,14 +281,14 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                       placeholder="john@example.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                      className="w-full bg-[#0b0f17] border border-[#25354b] rounded-lg pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14]"
                     />
                   </div>
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    WhatsApp / Mobile Number
+                    WhatsApp / Mobile
                   </label>
                   <div className="relative">
                     <MessageSquare className="absolute left-3 top-2.5 h-3.5 w-3.5 text-emerald-500" />
@@ -304,7 +302,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                           setSendViaWhatsapp(true);
                         }
                       }}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                      className="w-full bg-[#0b0f17] border border-[#25354b] rounded-lg pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                 </div>
@@ -318,10 +316,10 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                       type="checkbox"
                       checked={sendViaWhatsapp}
                       onChange={(e) => setSendViaWhatsapp(e.target.checked)}
-                      className="rounded border-slate-800 text-emerald-600 focus:ring-emerald-500 h-4 w-4 bg-slate-950"
+                      className="rounded border-[#25354b] text-emerald-600 focus:ring-emerald-500 h-4 w-4 bg-[#0b0f17]"
                     />
                     <div className="text-xs">
-                      <span className="font-semibold text-slate-200">Send invite link directly via WhatsApp</span>
+                      <span className="font-semibold text-white">Send invite link directly via WhatsApp</span>
                       <p className="text-[11px] text-slate-400">
                         {isWhatsAppConnected
                           ? 'Will be sent automatically through your paired WhatsApp device.'
@@ -341,7 +339,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                   <select
                     value={expiresInDays}
                     onChange={(e) => setExpiresInDays(Number(e.target.value))}
-                    className="w-full bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-[#0b0f17] border border-[#25354b] text-slate-300 text-xs rounded-lg px-3 py-2 focus:outline-none focus:border-[#fd7e14]"
                   >
                     <option value={1}>24 Hours</option>
                     <option value={3}>3 Days</option>
@@ -360,7 +358,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                       type="checkbox"
                       checked={singleUse}
                       onChange={(e) => setSingleUse(e.target.checked)}
-                      className="rounded border-slate-800 text-indigo-600 focus:ring-indigo-500 h-4 w-4 bg-slate-950"
+                      className="rounded border-[#25354b] text-[#fd7e14] focus:ring-[#fd7e14] h-4 w-4 bg-[#0b0f17]"
                     />
                     <span className="text-xs text-slate-300">Single-use token</span>
                   </label>
@@ -377,7 +375,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                     <button
                       type="button"
                       onClick={handleSelectAll}
-                      className="text-indigo-400 hover:text-indigo-300 font-medium"
+                      className="text-[#fd7e14] hover:text-orange-400 font-medium"
                     >
                       Select All
                     </button>
@@ -385,14 +383,14 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                     <button
                       type="button"
                       onClick={handleClearAll}
-                      className="text-slate-400 hover:text-slate-300"
+                      className="text-slate-400 hover:text-slate-200"
                     >
                       Clear
                     </button>
                   </div>
                 </div>
 
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 max-h-48 overflow-y-auto space-y-1.5 divide-y divide-slate-800/60">
+                <div className="bg-[#0b0f17] border border-[#25354b] rounded-xl p-2.5 max-h-48 overflow-y-auto space-y-1.5 divide-y divide-[#25354b]/60">
                   {apps.map((app) => {
                     const isChecked = !!selectedApps[app.pk];
                     const isAdminChecked = !!selectedAdminApps[app.pk];
@@ -400,7 +398,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                       <div
                         key={app.pk}
                         className={`flex items-center justify-between p-2 rounded-lg transition-colors ${
-                          isChecked ? 'bg-indigo-600/10 border border-indigo-500/20' : 'hover:bg-slate-900'
+                          isChecked ? 'bg-orange-500/10 border border-orange-500/20' : 'hover:bg-[#16202e]'
                         }`}
                       >
                         <label className="flex items-center space-x-2.5 flex-1 cursor-pointer select-none">
@@ -408,16 +406,16 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                             type="checkbox"
                             checked={isChecked}
                             onChange={() => handleToggleApp(app.pk)}
-                            className="rounded border-slate-800 text-indigo-600 focus:ring-indigo-500 h-4 w-4 bg-slate-950"
+                            className="rounded border-[#25354b] text-[#fd7e14] focus:ring-[#fd7e14] h-4 w-4 bg-[#0b0f17]"
                           />
                           {app.meta_icon ? (
                             <img
                               src={app.meta_icon}
                               alt={app.name}
-                              className="h-6 w-6 rounded object-contain bg-slate-900 p-0.5"
+                              className="h-6 w-6 rounded object-contain bg-[#111827] p-0.5"
                             />
                           ) : (
-                            <div className="h-6 w-6 rounded bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold text-[10px]">
+                            <div className="h-6 w-6 rounded bg-[#1e2c3f] text-[#fd7e14] flex items-center justify-center font-bold text-[10px]">
                               {app.name.substring(0, 2).toUpperCase()}
                             </div>
                           )}
@@ -426,7 +424,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
 
                         {/* Admin Role Checkbox if app has admin group */}
                         {isChecked && app.granular_admin_group_pk && (
-                          <label className="flex items-center space-x-1.5 cursor-pointer text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded ml-2 select-none">
+                          <label className="flex items-center space-x-1.5 cursor-pointer text-[11px] text-[#fd7e14] bg-orange-500/10 border border-orange-500/20 px-2 py-0.5 rounded ml-2 select-none">
                             <input
                               type="checkbox"
                               checked={isAdminChecked}
@@ -437,7 +435,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                                   [app.pk]: !prev[app.pk],
                                 }));
                               }}
-                              className="rounded border-amber-600 text-amber-500 focus:ring-amber-400 h-3.5 w-3.5 bg-slate-950"
+                              className="rounded border-[#fd7e14] text-[#fd7e14] focus:ring-[#fd7e14] h-3.5 w-3.5 bg-[#0b0f17]"
                             />
                             <span>Admin Role</span>
                           </label>
@@ -453,7 +451,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full flex items-center justify-center space-x-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold py-2.5 rounded-xl shadow-lg shadow-indigo-600/20 transition-all"
+                  className="w-full flex items-center justify-center space-x-2 bg-[#fd7e14] hover:bg-[#ea6c0a] disabled:opacity-50 text-white text-xs font-semibold py-2.5 rounded-lg shadow-sm transition-all"
                 >
                   <Link className="h-4 w-4" />
                   <span>{loading ? 'Generating Invite...' : 'Generate Invite Link'}</span>

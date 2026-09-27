@@ -16,13 +16,13 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+      <div className="bg-[#111827] border border-[#25354b] rounded-2xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
         
         {/* Header */}
-        <div className="p-5 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center space-x-2.5">
-            <div className="h-9 w-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center">
+        <div className="p-5 border-b border-[#25354b] bg-[#16202e] flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="h-9 w-9 rounded-lg bg-orange-500/15 border border-orange-500/30 text-[#fd7e14] flex items-center justify-center">
               <FileText className="h-5 w-5" />
             </div>
             <div>
@@ -34,7 +34,7 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-[#1e2c3f] rounded-lg transition-colors"
           >
             <X className="h-5 w-5" />
           </button>
@@ -43,7 +43,7 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
         {/* Log List */}
         <div className="p-5 overflow-y-auto flex-1">
           {logs.length === 0 ? (
-            <div className="text-center py-12 text-slate-500 text-xs">
+            <div className="text-center py-12 text-slate-400 text-xs">
               No audit logs recorded yet.
             </div>
           ) : (
@@ -56,7 +56,7 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
                 return (
                   <div
                     key={log.id}
-                    className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs"
+                    className="bg-[#0b0f17] border border-[#25354b] rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs"
                   >
                     <div className="flex items-start space-x-2.5">
                       <div className="mt-0.5">
@@ -69,12 +69,12 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
                       <div>
                         <div className="flex items-center space-x-2">
                           <span
-                            className={`font-mono text-[11px] px-1.5 py-0.2 rounded font-semibold ${
+                            className={`font-mono text-[11px] px-2 py-0.5 rounded font-semibold ${
                               isGrant
-                                ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
+                                ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                                 : isRevoke
-                                ? 'bg-rose-500/10 text-rose-300 border border-rose-500/20'
-                                : 'bg-indigo-500/10 text-indigo-300 border border-indigo-500/20'
+                                ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                                : 'bg-orange-500/15 text-[#fd7e14] border border-orange-500/30'
                             }`}
                           >
                             {log.action}
@@ -89,8 +89,8 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex sm:flex-col items-center sm:items-end justify-between w-full sm:w-auto text-[11px] text-slate-500 gap-1">
-                      <span>by <strong className="text-slate-400">{log.actor}</strong></span>
+                    <div className="flex sm:flex-col items-center sm:items-end justify-between w-full sm:w-auto text-[11px] text-slate-500 gap-1 font-mono">
+                      <span>by <strong className="text-slate-300">{log.actor}</strong></span>
                       <span>{new Date(log.timestamp).toLocaleTimeString()} {new Date(log.timestamp).toLocaleDateString()}</span>
                     </div>
                   </div>
@@ -101,10 +101,10 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900/50 flex justify-end">
+        <div className="p-4 border-t border-[#25354b] bg-[#16202e] flex justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors"
+            className="px-4 py-2 rounded-lg text-xs font-medium text-slate-300 hover:bg-[#1e2c3f] transition-colors"
           >
             Close
           </button>

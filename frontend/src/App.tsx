@@ -96,75 +96,156 @@ export const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [isWhatsAppModalOpen]);
 
-  // Handle cell click (grant/revoke access)
-  const handleToggleCell = async (user: User, app: Application, currentAccess: boolean) => {
-    const groupPk = app.bound_group_pk || matrixData?.app_group_map[app.pk];
-    if (!groupPk) {
+  // Unified Set Role Handler (supports None, Member, Administrator in both Instant and Staged modes)
+  const handleSetRole = async (user: User, app: Application, targetRole: 'none' | 'member' | 'admin') => {
+    const userGroupPk = app.granular_user_group_pk || app.bound_group_pk || matrixData?.app_group_map[app.pk];
+    let adminGroupPk = app.granular_admin_group_pk || matrixData?.app_admin_group_map?.[app.pk];
+
+    if (!userGroupPk && targetRole !== 'none') {
       setIsProvisionModalOpen(true);
       return;
     }
 
-    const newGrant = !currentAccess;
+    // Auto-provision admin group if user selected 'admin' but app does not have one yet
+    if (targetRole === 'admin' && !adminGroupPk) {
+      try {
+        setLoading(true);
+        showToast(`Provisioning admin group for ${app.name}...`, 'info');
+        const res = await api.provisionApp(app.pk, { create_user_group: true, create_admin_group: true });
+        adminGroupPk = res.admin_group_pk;
+        await loadData();
+      } catch (err: any) {
+        showToast(`Failed to provision admin group: ${err.message}`, 'error');
+        setLoading(false);
+        return;
+      }
+    }
+
+    const uPkStr = String(user.pk);
+    const isDirectMember = Boolean(
+      userGroupPk && (
+        user.groups.includes(userGroupPk) ||
+        matrixData?.permissions[uPkStr]?.[app.pk]
+      )
+    );
+    const isDirectAdmin = Boolean(
+      adminGroupPk && (
+        user.groups.includes(adminGroupPk) ||
+        matrixData?.admin_permissions?.[uPkStr]?.[app.pk]
+      )
+    );
+
+    let grantUser: boolean | null = null;
+    let grantAdmin: boolean | null = null;
+
+    if (targetRole === 'none') {
+      if (isDirectMember && userGroupPk) grantUser = false;
+      if (isDirectAdmin && adminGroupPk) grantAdmin = false;
+    } else if (targetRole === 'member') {
+      if (!isDirectMember && userGroupPk) grantUser = true;
+      if (isDirectAdmin && adminGroupPk) grantAdmin = false;
+    } else if (targetRole === 'admin') {
+      if (!isDirectAdmin && adminGroupPk) grantAdmin = true;
+      if (!isDirectMember && userGroupPk) grantUser = true;
+    }
+
+    if (grantUser === null && grantAdmin === null) {
+      return; // Already in target role
+    }
 
     if (stagedMode) {
-      // Add to staged changes or revert if already staged
+      // Stage the changes
       setStagedChanges((prev) => {
-        const existingIdx = prev.findIndex(
-          (c) => c.user_pk === user.pk && c.app_pk === app.pk
-        );
-        if (existingIdx >= 0) {
-          // If toggled back to original state, remove staged change
-          const existing = prev[existingIdx];
-          if (existing.grant === currentAccess) {
-            return prev.filter((_, idx) => idx !== existingIdx);
-          }
-          const updated = [...prev];
-          updated[existingIdx] = { ...existing, grant: newGrant };
-          return updated;
-        } else {
-          return [
-            ...prev,
-            {
+        let updated = [...prev];
+        if (grantUser !== null && userGroupPk) {
+          const idx = updated.findIndex(c => c.user_pk === user.pk && c.app_pk === app.pk && c.group_pk === userGroupPk);
+          if (idx >= 0) {
+            updated[idx] = { ...updated[idx], grant: grantUser };
+          } else {
+            updated.push({
               user_pk: user.pk,
               userName: user.name,
               app_pk: app.pk,
               appName: app.name,
-              group_pk: groupPk,
-              grant: newGrant,
-            },
-          ];
+              group_pk: userGroupPk,
+              grant: grantUser,
+            });
+          }
         }
+        if (grantAdmin !== null && adminGroupPk) {
+          const idx = updated.findIndex(c => c.user_pk === user.pk && c.app_pk === app.pk && c.group_pk === adminGroupPk);
+          if (idx >= 0) {
+            updated[idx] = { ...updated[idx], grant: grantAdmin };
+          } else {
+            updated.push({
+              user_pk: user.pk,
+              userName: user.name,
+              app_pk: app.pk,
+              appName: `${app.name} [Admin]`,
+              group_pk: adminGroupPk,
+              grant: grantAdmin,
+            });
+          }
+        }
+        return updated;
       });
+      showToast(`Staged role update for ${user.name} on ${app.name}`, 'info');
     } else {
-      // Instant Mode: Execute immediately with optimistic UI
+      // Instant Mode: execute immediately with optimistic UI
       try {
+        setLoading(true);
         setMatrixData((prev) => {
           if (!prev) return prev;
-          const uPkStr = String(user.pk);
+          const uStr = String(user.pk);
+          const nextPerms = { ...prev.permissions[uStr] };
+          const nextAdminPerms = { ...(prev.admin_permissions?.[uStr] || {}) };
+
+          if (targetRole === 'none') {
+            nextPerms[app.pk] = false;
+            nextAdminPerms[app.pk] = false;
+          } else if (targetRole === 'member') {
+            nextPerms[app.pk] = true;
+            nextAdminPerms[app.pk] = false;
+          } else if (targetRole === 'admin') {
+            nextPerms[app.pk] = true;
+            nextAdminPerms[app.pk] = true;
+          }
+
+          const updatedUsers = prev.users.map(u => {
+            if (u.pk !== user.pk) return u;
+            const gSet = new Set(u.groups);
+            if (grantUser === true && userGroupPk) gSet.add(userGroupPk);
+            if (grantUser === false && userGroupPk) gSet.delete(userGroupPk);
+            if (grantAdmin === true && adminGroupPk) gSet.add(adminGroupPk);
+            if (grantAdmin === false && adminGroupPk) gSet.delete(adminGroupPk);
+            return { ...u, groups: Array.from(gSet) };
+          });
+
           return {
             ...prev,
-            permissions: {
-              ...prev.permissions,
-              [uPkStr]: {
-                ...prev.permissions[uPkStr],
-                [app.pk]: newGrant,
-              },
-            },
+            users: updatedUsers,
+            permissions: { ...prev.permissions, [uStr]: nextPerms },
+            admin_permissions: { ...(prev.admin_permissions || {}), [uStr]: nextAdminPerms },
           };
         });
 
-        await api.togglePermission(user.pk, app.pk, groupPk, newGrant);
-        showToast(
-          `${newGrant ? 'Granted' : 'Revoked'} ${user.name} access to ${app.name}`,
-          'success'
-        );
-        
-        // Refresh health & logs in background
+        if (grantAdmin !== null && adminGroupPk) {
+          await api.togglePermission(user.pk, app.pk, adminGroupPk, grantAdmin);
+        }
+        if (grantUser !== null && userGroupPk) {
+          await api.togglePermission(user.pk, app.pk, userGroupPk, grantUser);
+        }
+
+        const roleLabel = targetRole === 'admin' ? 'Administrator' : targetRole === 'member' ? 'Member' : 'No Access';
+        showToast(`Updated ${user.name} on ${app.name} to ${roleLabel}`, 'success');
+
         api.getHealth().then(setHealth);
         api.getAuditLogs(50).then(setAuditLogs);
       } catch (err: any) {
         showToast(`Failed: ${err.message}`, 'error');
-        loadData(); // Revert
+        await loadData();
+      } finally {
+        setLoading(false);
       }
     }
   };
@@ -219,25 +300,6 @@ export const App: React.FC = () => {
       throw err;
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleToggleAdminCell = async (user: User, app: Application, currentAdmin: boolean) => {
-    const adminGroupPk = app.granular_admin_group_pk;
-    if (!adminGroupPk) {
-      showToast(`No admin group configured for ${app.name}`, 'error');
-      return;
-    }
-    const newAdmin = !currentAdmin;
-    try {
-      await api.togglePermission(user.pk, app.pk, adminGroupPk, newAdmin);
-      showToast(
-        `${newAdmin ? 'Granted' : 'Revoked'} ${user.name} admin role on ${app.name}`,
-        'info'
-      );
-      await loadData();
-    } catch (err: any) {
-      showToast(err.message, 'error');
     }
   };
 
@@ -324,7 +386,7 @@ export const App: React.FC = () => {
   const unprotectedApps = matrixData ? matrixData.apps.filter((a) => !a.is_protected) : [];
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col">
+    <div className="min-h-screen bg-[#0b0f17] text-slate-100 flex flex-col font-sans selection:bg-orange-500/30 selection:text-orange-200">
       
       {/* Header */}
       <Header
@@ -348,13 +410,13 @@ export const App: React.FC = () => {
         
         {/* Unauthenticated Login Screen if password auth is active */}
         {auth && !auth.authenticated && auth.auth_method === 'password' && (
-          <div className="max-w-md mx-auto my-16 bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-center">
-            <div className="h-12 w-12 rounded-xl bg-indigo-600/20 text-indigo-400 mx-auto flex items-center justify-center mb-4">
+          <div className="max-w-md mx-auto my-16 bg-[#111827] border border-[#25354b] rounded-2xl p-6 shadow-2xl text-center">
+            <div className="h-12 w-12 rounded-xl bg-orange-500/15 text-[#fd7e14] border border-orange-500/30 mx-auto flex items-center justify-center mb-4">
               <Lock className="h-6 w-6" />
             </div>
-            <h2 className="text-lg font-bold text-white mb-1">Administrator Login</h2>
+            <h2 className="text-lg font-bold text-white mb-1">authentik Administrator Login</h2>
             <p className="text-xs text-slate-400 mb-5">
-              Enter the admin password to access Authentik Access Manager.
+              Enter your admin password to access the Authentik Access Manager.
             </p>
             {loginError && (
               <div className="p-3 mb-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
@@ -367,12 +429,12 @@ export const App: React.FC = () => {
                 placeholder="Enter password..."
                 value={loginPassword}
                 onChange={(e) => setLoginPassword(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+                className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-[#fd7e14]"
                 autoFocus
               />
               <button
                 type="submit"
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold py-2.5 rounded-xl transition-colors shadow"
+                className="w-full bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-semibold py-2.5 rounded-xl transition-colors shadow"
               >
                 Sign In
               </button>
@@ -421,8 +483,7 @@ export const App: React.FC = () => {
                 data={matrixData}
                 stagedMode={stagedMode}
                 stagedChanges={stagedChanges}
-                onToggleCell={handleToggleCell}
-                onToggleAdminCell={handleToggleAdminCell}
+                onSetRole={handleSetRole}
                 onApplyStagedChanges={handleApplyStagedChanges}
                 onDiscardStagedChanges={handleDiscardStagedChanges}
                 onToggleUserActive={handleToggleUserActive}
@@ -443,23 +504,27 @@ export const App: React.FC = () => {
             )}
 
             {activeTab === 'audit' && (
-              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl">
-                <h3 className="text-base font-bold text-white mb-1">Audit Trail</h3>
-                <p className="text-xs text-slate-400 mb-4">Complete security event log.</p>
+              <div className="bg-[#111827] border border-[#25354b] rounded-2xl p-4 shadow-xl">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-base font-bold text-white mb-0.5">Authentik Audit Trail</h3>
+                    <p className="text-xs text-slate-400">Chronological security and permission changes.</p>
+                  </div>
+                </div>
                 <div className="space-y-2">
                   {auditLogs.map((log) => (
                     <div
                       key={log.id}
-                      className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between text-xs"
+                      className="bg-[#0b0f17] border border-[#25354b] rounded-xl p-3 flex items-center justify-between text-xs"
                     >
-                      <div className="flex items-center space-x-2">
-                        <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-bold">
+                      <div className="flex items-center space-x-2.5">
+                        <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-orange-500/10 text-[#fd7e14] border border-orange-500/20 font-bold">
                           {log.action}
                         </span>
                         <span className="font-semibold text-slate-200">{log.target_name}</span>
                         {log.details && <span className="text-slate-400 text-[11px]">• {log.details}</span>}
                       </div>
-                      <div className="text-[11px] text-slate-500">
+                      <div className="text-[11px] text-slate-500 font-mono">
                         {new Date(log.timestamp).toLocaleString()} by {log.actor}
                       </div>
                     </div>
@@ -524,10 +589,10 @@ export const App: React.FC = () => {
           <div
             className={`px-4 py-3 rounded-xl shadow-2xl border text-xs font-medium flex items-center space-x-2.5 backdrop-blur-md ${
               toast.type === 'success'
-                ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-200'
+                ? 'bg-[#111827] border-emerald-500/40 text-emerald-200'
                 : toast.type === 'error'
-                ? 'bg-rose-950/90 border-rose-500/40 text-rose-200'
-                : 'bg-indigo-950/90 border-indigo-500/40 text-indigo-200'
+                ? 'bg-[#111827] border-rose-500/40 text-rose-200'
+                : 'bg-[#111827] border-orange-500/40 text-orange-200'
             }`}
           >
             {toast.type === 'success' && <CheckCircle className="h-4 w-4 text-emerald-400" />}

@@ -1,0 +1,387 @@
+import uuid
+import httpx
+from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Any, Optional
+from app.config import settings
+
+class AuthentikClient:
+    def __init__(self):
+        self.base_url = settings.AUTHENTIK_URL.rstrip("/")
+        self.token = settings.AUTHENTIK_TOKEN
+        self.verify_ssl = not settings.AUTHENTIK_INSECURE_SKIP_VERIFY
+        self.demo_mode = settings.DEMO_MODE
+
+        # In-memory mock store for demo/testing mode
+        if self.demo_mode:
+            self._init_mock_store()
+
+    def _get_headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    async def _request(self, method: str, endpoint: str, **kwargs) -> Any:
+        url = f"{self.base_url}{endpoint}"
+        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=15.0) as client:
+            response = await client.request(
+                method, url, headers=self._get_headers(), **kwargs
+            )
+            response.raise_for_status()
+            if response.status_code == 204:
+                return None
+            return response.json()
+
+    async def _get_all_paginated(self, endpoint: str, params: Optional[Dict] = None) -> List[Dict[str, Any]]:
+        """Handles Authentik pagination to retrieve all items."""
+        all_results = []
+        current_endpoint = endpoint
+        current_params = params or {"page_size": 100}
+
+        while current_endpoint:
+            data = await self._request("GET", current_endpoint, params=current_params)
+            if isinstance(data, dict) and "results" in data:
+                all_results.extend(data["results"])
+                # Next page URL
+                next_url = data.get("next")
+                if next_url:
+                    # Strip base_url if present
+                    if next_url.startswith(self.base_url):
+                        current_endpoint = next_url[len(self.base_url):]
+                    else:
+                        current_endpoint = next_url
+                    current_params = None  # query params are already in next URL
+                else:
+                    break
+            elif isinstance(data, list):
+                all_results.extend(data)
+                break
+            else:
+                break
+
+        return all_results
+
+    # ==================== Real API Methods ====================
+
+    async def test_connection(self) -> bool:
+        if self.demo_mode:
+            return True
+        try:
+            res = await self._request("GET", "/api/v3/core/users/me/")
+            return bool(res and "username" in res)
+        except Exception:
+            return False
+
+    async def get_applications(self) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            return self.mock_applications
+        return await self._get_all_paginated("/api/v3/core/applications/")
+
+    async def get_groups(self) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            return self.mock_groups
+        return await self._get_all_paginated("/api/v3/core/groups/")
+
+    async def get_users(self) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            return self.mock_users
+        return await self._get_all_paginated("/api/v3/core/users/")
+
+    async def get_policy_bindings(self, target_pk: Optional[str] = None) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            if target_pk:
+                return [b for b in self.mock_policy_bindings if b.get("target") == target_pk]
+            return self.mock_policy_bindings
+        params = {"page_size": 200}
+        if target_pk:
+            params["target"] = target_pk
+        return await self._get_all_paginated("/api/v3/policies/bindings/", params=params)
+
+    async def create_group(self, name: str, attributes: Optional[Dict] = None) -> Dict[str, Any]:
+        if self.demo_mode:
+            new_group = {
+                "pk": str(uuid.uuid4()),
+                "name": name,
+                "is_superuser": False,
+                "users": [1], # admin is automatically in the group
+                "attributes": attributes or {},
+            }
+            self.mock_groups.append(new_group)
+            return new_group
+
+        payload = {
+            "name": name,
+            "is_superuser": False,
+            "attributes": attributes or {},
+        }
+        return await self._request("POST", "/api/v3/core/groups/", json=payload)
+
+    async def create_policy_binding(
+        self,
+        target_pk: str,
+        group_pk: str,
+        order: int = 0,
+        negate: bool = False,
+    ) -> Dict[str, Any]:
+        if self.demo_mode:
+            new_binding = {
+                "pk": str(uuid.uuid4()),
+                "target": target_pk,
+                "group": group_pk,
+                "order": order,
+                "negate": negate,
+                "enabled": True,
+            }
+            self.mock_policy_bindings.append(new_binding)
+            return new_binding
+
+        payload = {
+            "target": target_pk,
+            "group": group_pk,
+            "order": order,
+            "negate": negate,
+            "enabled": True,
+            "failure_result": False,
+        }
+        return await self._request("POST", "/api/v3/policies/bindings/", json=payload)
+
+    async def add_user_to_group(self, group_pk: str, user_pk: int) -> bool:
+        if self.demo_mode:
+            for g in self.mock_groups:
+                if g["pk"] == group_pk and user_pk not in g["users"]:
+                    g["users"].append(user_pk)
+            for u in self.mock_users:
+                if u["pk"] == user_pk and group_pk not in u.get("groups", []):
+                    u.setdefault("groups", []).append(group_pk)
+            return True
+
+        endpoint = f"/api/v3/core/groups/{group_pk}/add_user/"
+        await self._request("POST", endpoint, json={"pk": user_pk})
+        return True
+
+    async def remove_user_from_group(self, group_pk: str, user_pk: int) -> bool:
+        if self.demo_mode:
+            for g in self.mock_groups:
+                if g["pk"] == group_pk and user_pk in g["users"]:
+                    g["users"].remove(user_pk)
+            for u in self.mock_users:
+                if u["pk"] == user_pk and group_pk in u.get("groups", []):
+                    u["groups"].remove(group_pk)
+            return True
+
+        endpoint = f"/api/v3/core/groups/{group_pk}/remove_user/"
+        await self._request("POST", endpoint, json={"pk": user_pk})
+        return True
+
+    async def create_invitation(
+        self,
+        name: str,
+        expires: Optional[str],
+        fixed_data: Dict[str, Any],
+        single_use: bool = True
+    ) -> Dict[str, Any]:
+        if self.demo_mode:
+            new_invite = {
+                "pk": str(uuid.uuid4()),
+                "name": name,
+                "expires": expires,
+                "fixed_data": fixed_data,
+                "single_use": single_use,
+            }
+            self.mock_invites.append(new_invite)
+            return new_invite
+
+        payload = {
+            "name": name,
+            "expires": expires,
+            "fixed_data": fixed_data,
+            "single_use": single_use,
+        }
+        return await self._request("POST", "/api/v3/stages/invitation/invitations/", json=payload)
+
+    async def get_invitations(self) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            return self.mock_invites
+        return await self._get_all_paginated("/api/v3/stages/invitation/invitations/")
+
+    async def delete_invitation(self, invite_pk: str) -> bool:
+        if self.demo_mode:
+            self.mock_invites = [i for i in self.mock_invites if i["pk"] != invite_pk]
+            return True
+        await self._request("DELETE", f"/api/v3/stages/invitation/invitations/{invite_pk}/")
+        return True
+
+    # ==================== Mock Store Initialization ====================
+
+    def _init_mock_store(self):
+        # Sample apps
+        jellyfin_pk = "a1111111-1111-1111-1111-111111111111"
+        nextcloud_pk = "a2222222-2222-2222-2222-222222222222"
+        hass_pk = "a3333333-3333-3333-3333-333333333333"
+        paperless_pk = "a4444444-4444-4444-4444-444444444444"
+        unprotected_pk = "a5555555-5555-5555-5555-555555555555"
+
+        # Sample groups
+        g_admin_pk = "g0000000-0000-0000-0000-000000000000"
+        g_jellyfin_pk = "g1111111-1111-1111-1111-111111111111"
+        g_nextcloud_pk = "g2222222-2222-2222-2222-222222222222"
+        g_hass_pk = "g3333333-3333-3333-3333-333333333333"
+
+        self.mock_applications = [
+            {
+                "pk": jellyfin_pk,
+                "name": "Jellyfin Media",
+                "slug": "jellyfin",
+                "group": "Media",
+                "meta_icon": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/jellyfin.svg",
+                "meta_description": "Home movie and TV show streaming",
+                "launch_url": "https://jellyfin.lan",
+            },
+            {
+                "pk": nextcloud_pk,
+                "name": "Nextcloud",
+                "slug": "nextcloud",
+                "group": "Cloud",
+                "meta_icon": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/nextcloud.svg",
+                "meta_description": "Cloud file storage and photo backup",
+                "launch_url": "https://nextcloud.lan",
+            },
+            {
+                "pk": hass_pk,
+                "name": "Home Assistant",
+                "slug": "home-assistant",
+                "group": "Smart Home",
+                "meta_icon": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/home-assistant.svg",
+                "meta_description": "Smart home automation controller",
+                "launch_url": "https://hass.lan",
+            },
+            {
+                "pk": paperless_pk,
+                "name": "Paperless-ngx",
+                "slug": "paperless",
+                "group": "Productivity",
+                "meta_icon": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/paperless-ngx.svg",
+                "meta_description": "Document indexing and archiving",
+                "launch_url": "https://paperless.lan",
+            },
+            {
+                "pk": unprotected_pk,
+                "name": "Proxmox Backup Server",
+                "slug": "pbs",
+                "group": "Infrastructure",
+                "meta_icon": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/proxmox.svg",
+                "meta_description": "Hypervisor backup target (UNPROTECTED: Open to all!)",
+                "launch_url": "https://pbs.lan",
+            },
+        ]
+
+        self.mock_groups = [
+            {
+                "pk": g_admin_pk,
+                "name": "authentik Admins",
+                "is_superuser": True,
+                "users": [1],
+                "attributes": {},
+            },
+            {
+                "pk": g_jellyfin_pk,
+                "name": f"{settings.APP_GROUP_PREFIX}Jellyfin Media",
+                "is_superuser": False,
+                "users": [1, 2, 3],
+                "attributes": {},
+            },
+            {
+                "pk": g_nextcloud_pk,
+                "name": f"{settings.APP_GROUP_PREFIX}Nextcloud",
+                "is_superuser": False,
+                "users": [1, 2],
+                "attributes": {},
+            },
+            {
+                "pk": g_hass_pk,
+                "name": f"{settings.APP_GROUP_PREFIX}Home Assistant",
+                "is_superuser": False,
+                "users": [1],
+                "attributes": {},
+            },
+        ]
+
+        self.mock_users = [
+            {
+                "pk": 1,
+                "username": "alex",
+                "name": "Alex W (Admin)",
+                "email": "alex@home.lan",
+                "is_active": True,
+                "is_superuser": True,
+                "groups": [g_admin_pk, g_jellyfin_pk, g_nextcloud_pk, g_hass_pk],
+                "last_login": datetime.now(timezone.utc).isoformat(),
+                "avatar": "https://api.dicebear.com/7.x/bottts/svg?seed=alex",
+            },
+            {
+                "pk": 2,
+                "username": "sarah",
+                "name": "Sarah W",
+                "email": "sarah@home.lan",
+                "is_active": True,
+                "is_superuser": False,
+                "groups": [g_jellyfin_pk, g_nextcloud_pk],
+                "last_login": (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat(),
+                "avatar": "https://api.dicebear.com/7.x/bottts/svg?seed=sarah",
+            },
+            {
+                "pk": 3,
+                "username": "grandpa",
+                "name": "Grandpa Joe",
+                "email": "joe@family.net",
+                "is_active": True,
+                "is_superuser": False,
+                "groups": [g_jellyfin_pk],
+                "last_login": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+                "avatar": "https://api.dicebear.com/7.x/bottts/svg?seed=grandpa",
+            },
+            {
+                "pk": 4,
+                "username": "guest_charlie",
+                "name": "Charlie Guest",
+                "email": "charlie@external.com",
+                "is_active": False,
+                "is_superuser": False,
+                "groups": [],
+                "last_login": None,
+                "avatar": "https://api.dicebear.com/7.x/bottts/svg?seed=charlie",
+            },
+        ]
+
+        self.mock_policy_bindings = [
+            {
+                "pk": "b1111111-1111-1111-1111-111111111111",
+                "target": jellyfin_pk,
+                "group": g_jellyfin_pk,
+                "order": 0,
+                "negate": False,
+                "enabled": True,
+            },
+            {
+                "pk": "b2222222-2222-2222-2222-222222222222",
+                "target": nextcloud_pk,
+                "group": g_nextcloud_pk,
+                "order": 0,
+                "negate": False,
+                "enabled": True,
+            },
+            {
+                "pk": "b3333333-3333-3333-3333-333333333333",
+                "target": hass_pk,
+                "group": g_hass_pk,
+                "order": 0,
+                "negate": False,
+                "enabled": True,
+            },
+            # Notice: paperless and unprotected_pk have NO bindings!
+        ]
+
+        self.mock_invites = []
+
+authentik_client = AuthentikClient()

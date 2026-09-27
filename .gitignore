@@ -1,0 +1,64 @@
+# Environment & Secrets (NEVER COMMIT)
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Data & SQLite Database
+data/
+*.db
+*.sqlite3
+manager.db
+
+# WhatsApp Authentication State (Session Keys)
+whatsapp_auth/
+whatsapp-service/data/
+
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node.js & Frontend Build
+node_modules/
+frontend/node_modules/
+whatsapp-service/node_modules/
+frontend/dist/
+whatsapp-service/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Operating System & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo

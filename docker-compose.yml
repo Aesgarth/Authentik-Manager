@@ -1,0 +1,62 @@
+services:
+  authentik-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: authentik-manager
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # --- Authentik Connection ---
+      - AUTHENTIK_URL=https://authentik.yourdomain.local
+      - AUTHENTIK_TOKEN=your_authentik_api_bearer_token_here
+      - AUTHENTIK_INSECURE_SKIP_VERIFY=false
+      - APP_GROUP_PREFIX=App - 
+      - DEFAULT_ENROLLMENT_FLOW=default-enrollment-flow
+
+      # --- Tool Security & Authentication ---
+      # Options: 'none', 'password', 'forward_auth', or 'oidc'
+      - AUTH_METHOD=none
+      - ADMIN_PASSWORD=change_this_admin_password
+      - SECRET_KEY=replace_with_a_long_random_secret_key_32_chars_minimum
+
+      # --- Authentik OIDC (when AUTH_METHOD=oidc) ---
+      # - OIDC_ISSUER_URL=https://authentik.yourdomain.local/application/o/authentik-manager/
+      # - OIDC_CLIENT_ID=your_oidc_client_id
+      # - OIDC_CLIENT_SECRET=your_oidc_client_secret
+      # - OIDC_REDIRECT_URI=https://manager.yourdomain.local/api/auth/oidc/callback
+      # - OIDC_ADMIN_GROUP=authentik Admins
+
+      # --- WhatsApp Messaging (via Baileys) ---
+      - WHATSAPP_ENABLED=true
+      - WHATSAPP_SERVICE_URL=http://whatsapp:3001
+
+      # --- Demo Mode ---
+      # Set to 'true' to preview interface with mock data without connecting to Authentik
+      - DEMO_MODE=false
+    volumes:
+      - manager-data:/app/data
+    depends_on:
+      - whatsapp
+
+  whatsapp:
+    build:
+      context: ./whatsapp-service
+      dockerfile: Dockerfile
+    container_name: authentik-whatsapp
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - DEFAULT_COUNTRY_CODE=44 # Configurable default country prefix (e.g. 44 for UK, 1 for US/CA)
+      - WHATSAPP_AUTH_DIR=/app/data/whatsapp_auth
+    volumes:
+      - whatsapp-data:/app/data/whatsapp_auth
+
+volumes:
+  manager-data:
+    driver: local
+  whatsapp-data:
+    driver: local

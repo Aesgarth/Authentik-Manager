@@ -9,8 +9,11 @@ from app.models import (
     AccessMatrixResponse,
     TogglePermissionRequest,
     BulkToggleRequest,
+    CreateExpiringGrantRequest,
 )
 from app.services.audit_service import audit_service
+from app.services.lease_service import lease_service
+from app.database import revoke_expiring_grant
 
 class MatrixService:
     async def get_matrix(self) -> AccessMatrixResponse:
@@ -192,6 +195,8 @@ class MatrixService:
                 admin_permissions[u_pk_str][app_pk_str] = has_direct_admin
                 inherited_access[u_pk_str][app_pk_str] = inherited
 
+        expiring_grants = await lease_service.get_active_leases_map()
+
         return AccessMatrixResponse(
             users=user_schemas,
             apps=app_schemas,
@@ -200,13 +205,30 @@ class MatrixService:
             inherited_access=inherited_access,
             app_group_map=app_group_map,
             app_admin_group_map=app_admin_group_map,
+            expiring_grants=expiring_grants,
         )
 
     async def toggle_permission(self, req: TogglePermissionRequest, actor: str = "Admin") -> bool:
         if req.grant:
-            success = await authentik_client.add_user_to_group(req.group_pk, req.user_pk)
-            action_desc = "GRANT_APP_ACCESS"
+            if req.duration_hours:
+                await lease_service.create_or_update_lease(
+                    CreateExpiringGrantRequest(
+                        user_pk=req.user_pk,
+                        user_name=f"User #{req.user_pk}",
+                        app_pk=req.app_pk,
+                        app_name=f"App {req.app_pk}",
+                        group_pk=req.group_pk,
+                        role="member",
+                        duration_hours=req.duration_hours
+                    ),
+                    actor=actor
+                )
+                return True
+            else:
+                success = await authentik_client.add_user_to_group(req.group_pk, req.user_pk)
+                action_desc = "GRANT_APP_ACCESS"
         else:
+            await revoke_expiring_grant(req.user_pk, req.app_pk, req.group_pk)
             success = await authentik_client.remove_user_from_group(req.group_pk, req.user_pk)
             action_desc = "REVOKE_APP_ACCESS"
 

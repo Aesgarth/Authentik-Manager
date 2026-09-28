@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from app.config import settings
 from app.database import init_db
 from app.worker import worker
-from app.routers import auth, matrix, apps, users, invites, audit, health, whatsapp
+from app.routers import auth, matrix, apps, users, invites, audit, health, whatsapp, templates
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -44,6 +44,7 @@ app.include_router(invites.router)
 app.include_router(audit.router)
 app.include_router(health.router)
 app.include_router(whatsapp.router)
+app.include_router(templates.router)
 
 # Mount frontend static files if built
 frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../frontend/dist"))

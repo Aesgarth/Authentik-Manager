@@ -1,7 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import get_current_user
-from app.models import AccessMatrixResponse, TogglePermissionRequest, BulkToggleRequest
+from app.models import (
+    AccessMatrixResponse,
+    TogglePermissionRequest,
+    BulkToggleRequest,
+    CreateExpiringGrantRequest,
+    RevokeExpiringGrantRequest,
+    ExpiringGrantSchema,
+)
 from app.services.matrix_service import matrix_service
+from app.services.lease_service import lease_service
 
 router = APIRouter(prefix="/api/matrix", tags=["Access Matrix"])
 
@@ -28,3 +36,23 @@ async def bulk_toggle_permissions(
     actor = current_user.get("username", "Admin")
     result = await matrix_service.bulk_toggle_permissions(req, actor=actor)
     return result
+
+@router.post("/lease", response_model=ExpiringGrantSchema)
+async def create_or_update_lease(
+    req: CreateExpiringGrantRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    actor = current_user.get("username", "Admin")
+    try:
+        return await lease_service.create_or_update_lease(req, actor=actor)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/lease")
+async def revoke_lease(
+    req: RevokeExpiringGrantRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    actor = current_user.get("username", "Admin")
+    success = await lease_service.revoke_lease(req, actor=actor)
+    return {"status": "success", "revoked": success}

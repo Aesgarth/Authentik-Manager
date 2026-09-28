@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { X, Copy, Check, UserPlus, Link, Mail, MessageSquare, ExternalLink } from 'lucide-react';
-import { Application, TrackedInvite } from '../types';
+import { Application, TrackedInvite, AccessTemplate } from '../types';
 
 interface InviteModalProps {
   isOpen: boolean;
   onClose: () => void;
   apps: Application[];
   appGroupMap: Record<string, string | null>;
+  templates?: AccessTemplate[];
   isWhatsAppConnected?: boolean;
   onCreateInvite: (params: {
     name: string;
@@ -26,6 +27,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
   onClose,
   apps,
   appGroupMap,
+  templates = [],
   isWhatsAppConnected = false,
   onCreateInvite,
 }) => {
@@ -65,6 +67,37 @@ export const InviteModal: React.FC<InviteModalProps> = ({
   const handleClearAll = () => {
     setSelectedApps({});
     setSelectedAdminApps({});
+  };
+
+  const handleSelectTemplate = (templateId: number) => {
+    const tpl = templates.find((t) => t.id === templateId);
+    if (!tpl) return;
+    const newApps: Record<string, boolean> = {};
+    const newAdmins: Record<string, boolean> = {};
+
+    const wildcardRole = tpl.assignments['*'];
+    if (wildcardRole) {
+      apps.forEach((a) => {
+        newApps[a.pk] = true;
+        if (wildcardRole === 'admin' && a.granular_admin_group_pk) {
+          newAdmins[a.pk] = true;
+        }
+      });
+    }
+
+    Object.entries(tpl.assignments).forEach(([key, role]) => {
+      if (key === '*') return;
+      const app = apps.find((a) => a.pk === key || a.slug === key);
+      if (app) {
+        newApps[app.pk] = true;
+        if (role === 'admin' && app.granular_admin_group_pk) {
+          newAdmins[app.pk] = true;
+        }
+      }
+    });
+
+    setSelectedApps(newApps);
+    setSelectedAdminApps(newAdmins);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -389,6 +422,30 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                     </button>
                   </div>
                 </div>
+
+                {/* Optional Preset Selector */}
+                {templates.length > 0 && (
+                  <div className="mb-2.5">
+                    <select
+                      onChange={(e) => {
+                        const id = Number(e.target.value);
+                        if (id) handleSelectTemplate(id);
+                        e.target.value = '';
+                      }}
+                      defaultValue=""
+                      className="w-full bg-[#0b0f17] border border-[#25354b] rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-[#fd7e14]"
+                    >
+                      <option value="" disabled>
+                        ⚡ Choose a Role Preset to auto-fill (e.g. Household, Guest)...
+                      </option>
+                      {templates.map((tpl) => (
+                        <option key={tpl.id} value={tpl.id}>
+                          {tpl.name} ({tpl.description || 'Pre-configured apps'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 <div className="bg-[#0b0f17] border border-[#25354b] rounded-xl p-2.5 max-h-48 overflow-y-auto space-y-1.5 divide-y divide-[#25354b]/60">
                   {apps.map((app) => {

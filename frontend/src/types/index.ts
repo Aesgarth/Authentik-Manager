@@ -38,6 +38,28 @@ export interface Application {
   all_bound_groups: BoundGroupRef[];
 }
 
+export interface ExpiringGrant {
+  id?: number;
+  user_pk: number;
+  user_name: string;
+  app_pk: string;
+  app_name: string;
+  group_pk: string;
+  role: 'member' | 'admin';
+  expires_at: string;
+  created_at: string;
+  is_revoked: boolean;
+}
+
+export interface AccessTemplate {
+  id: number;
+  name: string;
+  description?: string;
+  icon: string;
+  assignments: Record<string, 'member' | 'admin'>;
+  created_at: string;
+}
+
 export interface AccessMatrixData {
   users: User[];
   apps: Application[];
@@ -46,6 +68,7 @@ export interface AccessMatrixData {
   inherited_access?: Record<string, Record<string, string[]>>; // user_pk -> { app_pk -> string[] }
   app_group_map: Record<string, string | null>;
   app_admin_group_map?: Record<string, string | null>;
+  expiring_grants?: Record<string, Record<string, ExpiringGrant>>; // user_pk -> { app_pk -> ExpiringGrant }
 }
 
 export interface StagedChange {
@@ -55,6 +78,7 @@ export interface StagedChange {
   appName: string;
   group_pk: string;
   grant: boolean;
+  duration_hours?: number;
 }
 
 export interface TrackedInvite {

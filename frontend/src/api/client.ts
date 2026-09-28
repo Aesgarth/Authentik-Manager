@@ -1,4 +1,4 @@
-import { AccessMatrixData, HealthStatus, AuthStatus, TrackedInvite, AuditLog, StagedChange } from '../types';
+import { AccessMatrixData, HealthStatus, AuthStatus, TrackedInvite, AuditLog, StagedChange, ExpiringGrant, AccessTemplate } from '../types';
 
 const API_BASE = '/api';
 
@@ -187,6 +187,74 @@ export const api = {
   async getAuditLogs(limit: number = 100): Promise<AuditLog[]> {
     const res = await fetch(`${API_BASE}/audit?limit=${limit}`);
     if (!res.ok) throw new Error('Failed to fetch audit logs');
+    return res.json();
+  },
+
+  async createLease(params: {
+    user_pk: number;
+    user_name: string;
+    app_pk: string;
+    app_name: string;
+    group_pk: string;
+    role: 'member' | 'admin';
+    duration_hours?: number;
+    expires_at?: string;
+  }): Promise<ExpiringGrant> {
+    const res = await fetch(`${API_BASE}/matrix/lease`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (!res.ok) throw new Error('Failed to create temporary access grant');
+    return res.json();
+  },
+
+  async revokeLease(user_pk: number, app_pk: string, group_pk: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/matrix/lease`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_pk, app_pk, group_pk }),
+    });
+    if (!res.ok) throw new Error('Failed to revoke temporary lease');
+  },
+
+  async getTemplates(): Promise<AccessTemplate[]> {
+    const res = await fetch(`${API_BASE}/templates`);
+    if (!res.ok) throw new Error('Failed to fetch access templates');
+    return res.json();
+  },
+
+  async createTemplate(params: {
+    name: string;
+    description?: string;
+    icon?: string;
+    assignments: Record<string, string>;
+  }): Promise<AccessTemplate> {
+    const res = await fetch(`${API_BASE}/templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (!res.ok) throw new Error('Failed to create access template');
+    return res.json();
+  },
+
+  async deleteTemplate(templateId: number): Promise<void> {
+    const res = await fetch(`${API_BASE}/templates/${templateId}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to delete access template');
+  },
+
+  async applyTemplate(templateId: number, params: {
+    user_pk: number;
+    user_name: string;
+    duration_hours?: number;
+  }): Promise<any> {
+    const res = await fetch(`${API_BASE}/templates/${templateId}/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (!res.ok) throw new Error('Failed to apply access template');
     return res.json();
   },
 };

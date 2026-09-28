@@ -9,7 +9,8 @@ import {
   StagedChange, 
   User, 
   Application,
-  WhatsAppStatus
+  WhatsAppStatus,
+  AccessTemplate
 } from './types';
 import { Header } from './components/Header';
 import { OverviewCards } from './components/OverviewCards';
@@ -21,6 +22,7 @@ import { ProvisionModal } from './components/ProvisionModal';
 import { AuditLogDrawer } from './components/AuditLogDrawer';
 import { FlowGuideModal } from './components/FlowGuideModal';
 import { WhatsAppModal } from './components/WhatsAppModal';
+import { TemplateModal } from './components/TemplateModal';
 import { Lock, AlertCircle, CheckCircle } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -43,6 +45,10 @@ export const App: React.FC = () => {
   const [isGuideModalOpen, setIsGuideModalOpen] = useState(false);
   const [isAuditDrawerOpen, setIsAuditDrawerOpen] = useState(false);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+
+  // Role Presets / Personas
+  const [templates, setTemplates] = useState<AccessTemplate[]>([]);
 
   // Password Login state
   const [loginPassword, setLoginPassword] = useState('');
@@ -59,7 +65,7 @@ export const App: React.FC = () => {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [matrix, h, a, invs, logs, guide, wa] = await Promise.all([
+      const [matrix, h, a, invs, logs, guide, wa, tmpls] = await Promise.all([
         api.getMatrix(),
         api.getHealth(),
         api.getAuthStatus(),
@@ -67,6 +73,7 @@ export const App: React.FC = () => {
         api.getAuditLogs(50),
         api.getExpressionPolicySnippet(),
         api.getWhatsAppStatus().catch(() => null),
+        api.getTemplates().catch(() => []),
       ]);
       setMatrixData(matrix);
       setHealth(h);
@@ -75,6 +82,7 @@ export const App: React.FC = () => {
       setAuditLogs(logs);
       setFlowGuide(guide);
       if (wa) setWhatsAppStatus(wa);
+      if (tmpls) setTemplates(tmpls);
     } catch (err: any) {
       console.error('Failed to load data:', err);
       showToast(err.message || 'Failed to connect to backend', 'error');
@@ -96,8 +104,13 @@ export const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [isWhatsAppModalOpen]);
 
-  // Unified Set Role Handler (supports None, Member, Administrator in both Instant and Staged modes)
-  const handleSetRole = async (user: User, app: Application, targetRole: 'none' | 'member' | 'admin') => {
+  // Unified Set Role Handler (supports None, Member, Administrator in both Instant and Staged modes, plus Expiring Leases)
+  const handleSetRole = async (
+    user: User, 
+    app: Application, 
+    targetRole: 'none' | 'member' | 'admin',
+    durationHours?: number
+  ) => {
     const userGroupPk = app.granular_user_group_pk || app.bound_group_pk || matrixData?.app_group_map[app.pk];
     let adminGroupPk = app.granular_admin_group_pk || matrixData?.app_admin_group_map?.[app.pk];
 
@@ -149,8 +162,8 @@ export const App: React.FC = () => {
       if (!isDirectMember && userGroupPk) grantUser = true;
     }
 
-    if (grantUser === null && grantAdmin === null) {
-      return; // Already in target role
+    if (grantUser === null && grantAdmin === null && !durationHours) {
+      return; // Already in target role without a duration change
     }
 
     if (stagedMode) {
@@ -160,7 +173,7 @@ export const App: React.FC = () => {
         if (grantUser !== null && userGroupPk) {
           const idx = updated.findIndex(c => c.user_pk === user.pk && c.app_pk === app.pk && c.group_pk === userGroupPk);
           if (idx >= 0) {
-            updated[idx] = { ...updated[idx], grant: grantUser };
+            updated[idx] = { ...updated[idx], grant: grantUser, duration_hours: durationHours };
           } else {
             updated.push({
               user_pk: user.pk,
@@ -169,13 +182,14 @@ export const App: React.FC = () => {
               appName: app.name,
               group_pk: userGroupPk,
               grant: grantUser,
+              duration_hours: durationHours,
             });
           }
         }
         if (grantAdmin !== null && adminGroupPk) {
           const idx = updated.findIndex(c => c.user_pk === user.pk && c.app_pk === app.pk && c.group_pk === adminGroupPk);
           if (idx >= 0) {
-            updated[idx] = { ...updated[idx], grant: grantAdmin };
+            updated[idx] = { ...updated[idx], grant: grantAdmin, duration_hours: durationHours };
           } else {
             updated.push({
               user_pk: user.pk,
@@ -184,6 +198,7 @@ export const App: React.FC = () => {
               appName: `${app.name} [Admin]`,
               group_pk: adminGroupPk,
               grant: grantAdmin,
+              duration_hours: durationHours,
             });
           }
         }
@@ -199,10 +214,13 @@ export const App: React.FC = () => {
           const uStr = String(user.pk);
           const nextPerms = { ...prev.permissions[uStr] };
           const nextAdminPerms = { ...(prev.admin_permissions?.[uStr] || {}) };
+          const nextExpiringAll = { ...(prev.expiring_grants || {}) };
+          const nextUserExpiring = { ...(nextExpiringAll[uStr] || {}) };
 
           if (targetRole === 'none') {
             nextPerms[app.pk] = false;
             nextAdminPerms[app.pk] = false;
+            delete nextUserExpiring[app.pk];
           } else if (targetRole === 'member') {
             nextPerms[app.pk] = true;
             nextAdminPerms[app.pk] = false;
@@ -221,23 +239,49 @@ export const App: React.FC = () => {
             return { ...u, groups: Array.from(gSet) };
           });
 
+          nextExpiringAll[uStr] = nextUserExpiring;
+
           return {
             ...prev,
             users: updatedUsers,
             permissions: { ...prev.permissions, [uStr]: nextPerms },
             admin_permissions: { ...(prev.admin_permissions || {}), [uStr]: nextAdminPerms },
+            expiring_grants: nextExpiringAll,
           };
         });
 
-        if (grantAdmin !== null && adminGroupPk) {
-          await api.togglePermission(user.pk, app.pk, adminGroupPk, grantAdmin);
-        }
-        if (grantUser !== null && userGroupPk) {
-          await api.togglePermission(user.pk, app.pk, userGroupPk, grantUser);
+        if (durationHours && targetRole !== 'none') {
+          const groupToGrant = targetRole === 'admin' ? adminGroupPk! : userGroupPk!;
+          const lease = await api.createLease({
+            user_pk: user.pk,
+            user_name: user.name,
+            app_pk: app.pk,
+            app_name: app.name,
+            group_pk: groupToGrant,
+            role: targetRole,
+            duration_hours: durationHours,
+          });
+          setMatrixData(prev => {
+            if (!prev) return prev;
+            const uStr = String(user.pk);
+            const nextAll = { ...(prev.expiring_grants || {}) };
+            const nextUser = { ...(nextAll[uStr] || {}) };
+            nextUser[app.pk] = lease;
+            nextAll[uStr] = nextUser;
+            return { ...prev, expiring_grants: nextAll };
+          });
+        } else {
+          if (grantAdmin !== null && adminGroupPk) {
+            await api.togglePermission(user.pk, app.pk, adminGroupPk, grantAdmin);
+          }
+          if (grantUser !== null && userGroupPk) {
+            await api.togglePermission(user.pk, app.pk, userGroupPk, grantUser);
+          }
         }
 
         const roleLabel = targetRole === 'admin' ? 'Administrator' : targetRole === 'member' ? 'Member' : 'No Access';
-        showToast(`Updated ${user.name} on ${app.name} to ${roleLabel}`, 'success');
+        const suffix = durationHours ? ` (${durationHours}h lease)` : '';
+        showToast(`Updated ${user.name} on ${app.name} to ${roleLabel}${suffix}`, 'success');
 
         api.getHealth().then(setHealth);
         api.getAuditLogs(50).then(setAuditLogs);
@@ -247,6 +291,53 @@ export const App: React.FC = () => {
       } finally {
         setLoading(false);
       }
+    }
+  };
+
+  // Role Preset (Template) Actions
+  const handleCreateTemplate = async (params: {
+    name: string;
+    description?: string;
+    icon?: string;
+    assignments: Record<string, string>;
+  }) => {
+    try {
+      const created = await api.createTemplate(params);
+      setTemplates((prev) => [...prev, created]);
+      showToast(`Created role preset "${created.name}"`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to create role preset', 'error');
+      throw err;
+    }
+  };
+
+  const handleDeleteTemplate = async (templateId: number) => {
+    try {
+      await api.deleteTemplate(templateId);
+      setTemplates((prev) => prev.filter((t) => t.id !== templateId));
+      showToast('Role preset deleted', 'info');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to delete role preset', 'error');
+      throw err;
+    }
+  };
+
+  const handleApplyTemplate = async (templateId: number, params: {
+    user_pk: number;
+    user_name: string;
+    duration_hours?: number;
+  }) => {
+    try {
+      setLoading(true);
+      const res = await api.applyTemplate(templateId, params);
+      showToast(`Applied preset! (${res.applied_count} grants configured)`, 'success');
+      setIsTemplateModalOpen(false);
+      await loadData();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to apply preset', 'error');
+      throw err;
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -401,6 +492,7 @@ export const App: React.FC = () => {
         onOpenInviteModal={() => setIsInviteModalOpen(true)}
         onOpenGuideModal={() => setIsGuideModalOpen(true)}
         onOpenWhatsAppModal={() => setIsWhatsAppModalOpen(true)}
+        onOpenTemplatesModal={() => setIsTemplateModalOpen(true)}
         onLogout={handleLogout}
         loading={loading}
       />
@@ -489,6 +581,7 @@ export const App: React.FC = () => {
                 onToggleUserActive={handleToggleUserActive}
                 onProvisionApp={() => setIsProvisionModalOpen(true)}
                 onProvisionAll={handleProvisionAll}
+                onOpenTemplates={() => setIsTemplateModalOpen(true)}
                 loading={loading}
               />
             )}
@@ -545,6 +638,7 @@ export const App: React.FC = () => {
             onClose={() => setIsInviteModalOpen(false)}
             apps={matrixData.apps}
             appGroupMap={matrixData.app_group_map}
+            templates={templates}
             isWhatsAppConnected={whatsAppStatus?.status === 'connected'}
             onCreateInvite={handleCreateInvite}
           />
@@ -554,6 +648,17 @@ export const App: React.FC = () => {
             apps={matrixData.apps}
             onProvisionApp={handleProvisionApp}
             onProvisionAll={handleProvisionAll}
+            loading={loading}
+          />
+          <TemplateModal
+            isOpen={isTemplateModalOpen}
+            onClose={() => setIsTemplateModalOpen(false)}
+            templates={templates}
+            apps={matrixData.apps}
+            users={matrixData.users}
+            onCreateTemplate={handleCreateTemplate}
+            onDeleteTemplate={handleDeleteTemplate}
+            onApplyTemplate={handleApplyTemplate}
             loading={loading}
           />
         </>

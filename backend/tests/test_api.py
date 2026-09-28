@@ -150,3 +150,100 @@ async def test_granular_app_provisioning():
         assert updated_paperless["granular_user_group_pk"] == prov_data["user_group_pk"]
         assert updated_paperless["granular_admin_group_pk"] == prov_data["admin_group_pk"]
 
+@pytest.mark.asyncio
+async def test_expiring_grants():
+    from app.services.lease_service import lease_service
+    from datetime import datetime, timezone, timedelta
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create an expiring lease on app
+        lease_res = await client.post(
+            "/api/matrix/lease",
+            json={
+                "user_pk": 4, # Charlie guest
+                "user_name": "Charlie Guest",
+                "app_pk": "a1111111-1111-1111-1111-111111111111",
+                "app_name": "Jellyfin",
+                "group_pk": "g1111111-1111-1111-1111-111111111111",
+                "role": "member",
+                "duration_hours": 24
+            }
+        )
+        assert lease_res.status_code == 200
+        grant_data = lease_res.json()
+        assert grant_data["user_pk"] == 4
+        assert grant_data["role"] == "member"
+        assert grant_data["expires_at"] is not None
+
+        # Verify matrix includes active lease
+        matrix = (await client.get("/api/matrix")).json()
+        assert "expiring_grants" in matrix
+        assert "4" in matrix["expiring_grants"]
+        assert "a1111111-1111-1111-1111-111111111111" in matrix["expiring_grants"]["4"]
+
+        # Test expiration: set expires_at in the past
+        past_iso = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        from app.database import save_expiring_grant
+        await save_expiring_grant(
+            user_pk=4,
+            user_name="Charlie Guest",
+            app_pk="a1111111-1111-1111-1111-111111111111",
+            app_name="Jellyfin",
+            group_pk="g1111111-1111-1111-1111-111111111111",
+            role="member",
+            expires_at=past_iso
+        )
+
+        expired_count = await lease_service.check_and_expire_leases()
+        assert expired_count >= 1
+
+        # Verify revoked in matrix
+        active_leases = await lease_service.get_active_leases_map()
+        assert "a1111111-1111-1111-1111-111111111111" not in active_leases.get("4", {})
+
+@pytest.mark.asyncio
+async def test_access_templates():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # List default templates
+        list_res = await client.get("/api/templates")
+        assert list_res.status_code == 200
+        templates = list_res.json()
+        assert len(templates) >= 3
+        template_names = [t["name"] for t in templates]
+        assert "Household Member" in template_names
+        assert "Guest / Visitor" in template_names
+
+        # Create custom template
+        create_res = await client.post(
+            "/api/templates",
+            json={
+                "name": "Media Consumer",
+                "description": "Access to streaming entertainment only",
+                "icon": "film",
+                "assignments": {
+                    "a1111111-1111-1111-1111-111111111111": "member"
+                }
+            }
+        )
+        assert create_res.status_code == 200
+        created = create_res.json()
+        assert created["name"] == "Media Consumer"
+        assert created["icon"] == "film"
+
+        # Apply template to a user
+        apply_res = await client.post(
+            f"/api/templates/{created['id']}/apply",
+            json={
+                "template_id": created["id"],
+                "user_pk": 4,
+                "user_name": "Charlie Guest",
+                "duration_hours": 48
+            }
+        )
+        assert apply_res.status_code == 200
+        apply_data = apply_res.json()
+        assert apply_data["applied_count"] >= 1
+
+

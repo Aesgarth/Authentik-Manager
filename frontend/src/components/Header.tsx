@@ -8,7 +8,8 @@ import {
   BookOpen, 
   LogOut, 
   LogIn,
-  MessageSquare
+  MessageSquare,
+  Sparkles
 } from 'lucide-react';
 import { HealthStatus, AuthStatus, WhatsAppStatus } from '../types';
 
@@ -24,6 +25,7 @@ interface HeaderProps {
   onOpenInviteModal: () => void;
   onOpenGuideModal: () => void;
   onOpenWhatsAppModal: () => void;
+  onOpenTemplatesModal?: () => void;
   onLogout: () => void;
   loading: boolean;
 }
@@ -40,6 +42,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenInviteModal,
   onOpenGuideModal,
   onOpenWhatsAppModal,
+  onOpenTemplatesModal,
   onLogout,
   loading,
 }) => {
@@ -208,6 +211,18 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <BookOpen className="h-3.5 w-3.5" />
             </button>
+
+            {/* Access Presets / Personas */}
+            {onOpenTemplatesModal && (
+              <button
+                onClick={onOpenTemplatesModal}
+                className="flex items-center space-x-1.5 text-xs text-slate-300 hover:text-white bg-[#16202e] hover:bg-[#1e2c3f] border border-[#25354b] px-2.5 py-1.5 rounded-lg transition-colors"
+                title="Manage Role Presets & Personas"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-[#fd7e14]" />
+                <span className="hidden sm:inline font-medium">Presets</span>
+              </button>
+            )}
 
             {/* Primary Action Button: Authentik Orange */}
             <button

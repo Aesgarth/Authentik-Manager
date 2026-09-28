@@ -48,6 +48,57 @@ class ApplicationSchema(BaseModel):
     has_granular_admin_group: bool = False
     all_bound_groups: List[BoundGroupRef] = []
 
+# --- Expiring Access Grant Models ---
+
+class ExpiringGrantSchema(BaseModel):
+    id: Optional[int] = None
+    user_pk: int
+    user_name: str
+    app_pk: str
+    app_name: str
+    group_pk: str
+    role: str # 'member' | 'admin'
+    expires_at: str # ISO 8601
+    created_at: str
+    is_revoked: bool = False
+
+class CreateExpiringGrantRequest(BaseModel):
+    user_pk: int
+    user_name: str
+    app_pk: str
+    app_name: str
+    group_pk: str
+    role: str = "member"
+    duration_hours: Optional[int] = None # e.g. 24, 72, 168 (7d), 720 (30d)
+    expires_at: Optional[str] = None # Explicit ISO 8601 datetime
+
+class RevokeExpiringGrantRequest(BaseModel):
+    user_pk: int
+    app_pk: str
+    group_pk: str
+
+# --- Access Templates / Personas Models ---
+
+class AccessTemplateSchema(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    icon: str = "shield"
+    assignments: Dict[str, str] # app_pk or slug -> 'member' | 'admin'
+    created_at: str
+
+class CreateAccessTemplateRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    icon: Optional[str] = "shield"
+    assignments: Dict[str, str]
+
+class ApplyAccessTemplateRequest(BaseModel):
+    template_id: int
+    user_pk: int
+    user_name: str
+    duration_hours: Optional[int] = None # Optional lease in hours
+
 # --- Access Matrix Models ---
 
 class AccessMatrixResponse(BaseModel):
@@ -63,12 +114,15 @@ class AccessMatrixResponse(BaseModel):
     app_group_map: Dict[str, Optional[str]]
     # Mapping app_pk -> bound admin group_pk
     app_admin_group_map: Dict[str, Optional[str]] = {}
+    # Active expiring grants: user_pk -> { app_pk: ExpiringGrantSchema }
+    expiring_grants: Dict[str, Dict[str, ExpiringGrantSchema]] = {}
 
 class TogglePermissionRequest(BaseModel):
     user_pk: int
     app_pk: str
     group_pk: str
     grant: bool
+    duration_hours: Optional[int] = None
 
 class BulkToggleRequest(BaseModel):
     changes: List[TogglePermissionRequest]

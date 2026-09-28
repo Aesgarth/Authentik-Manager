@@ -1,4 +1,16 @@
-import { AccessMatrixData, HealthStatus, AuthStatus, TrackedInvite, AuditLog, StagedChange, ExpiringGrant, AccessTemplate } from '../types';
+import { 
+  AccessMatrixData, 
+  HealthStatus, 
+  AuthStatus, 
+  TrackedInvite, 
+  AuditLog, 
+  StagedChange, 
+  ExpiringGrant, 
+  AccessTemplate,
+  AppSettings,
+  UpdateSettingsPayload,
+  TestConnectionResult
+} from '../types';
 
 const API_BASE = '/api';
 
@@ -255,6 +267,39 @@ export const api = {
       body: JSON.stringify(params),
     });
     if (!res.ok) throw new Error('Failed to apply access template');
+    return res.json();
+  },
+
+  async getSettings(): Promise<AppSettings> {
+    const res = await fetch(`${API_BASE}/settings`);
+    if (!res.ok) throw new Error('Failed to fetch settings');
+    return res.json();
+  },
+
+  async updateSettings(payload: UpdateSettingsPayload): Promise<AppSettings> {
+    const res = await fetch(`${API_BASE}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to update settings' }));
+      throw new Error(err.detail || 'Failed to update settings');
+    }
+    return res.json();
+  },
+
+  async testAuthentikConnection(params: {
+    url?: string;
+    token?: string;
+    insecure_skip_verify?: boolean;
+  }): Promise<TestConnectionResult> {
+    const res = await fetch(`${API_BASE}/settings/test-authentik`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (!res.ok) throw new Error('Failed to test Authentik connection');
     return res.json();
   },
 };

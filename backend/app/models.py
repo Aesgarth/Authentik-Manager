@@ -231,3 +231,44 @@ class HealthResponse(BaseModel):
     total_apps: int
     unprotected_apps_count: int
     active_invites_count: int
+
+# --- Settings & Admin Panel Models ---
+
+class SettingsResponse(BaseModel):
+    authentik_url: str
+    authentik_token_masked: str
+    authentik_token_configured: bool
+    authentik_insecure_skip_verify: bool
+    app_group_prefix: str
+    default_enrollment_flow: str
+    whatsapp_enabled: bool
+    whatsapp_service_url: str
+    default_country_code: str
+    custom_invite_message: Optional[str] = None
+    notification_webhook_url: Optional[str] = None
+    default_lease_duration_hours: int = 72
+    default_invite_expiry_days: int = 7
+
+class UpdateSettingsRequest(BaseModel):
+    authentik_url: Optional[str] = None
+    authentik_token: Optional[str] = None
+    authentik_insecure_skip_verify: Optional[bool] = None
+    app_group_prefix: Optional[str] = None
+    default_enrollment_flow: Optional[str] = None
+    whatsapp_enabled: Optional[bool] = None
+    whatsapp_service_url: Optional[str] = None
+    default_country_code: Optional[str] = None
+    custom_invite_message: Optional[str] = None
+    notification_webhook_url: Optional[str] = None
+    default_lease_duration_hours: Optional[int] = None
+    default_invite_expiry_days: Optional[int] = None
+
+class TestConnectionRequest(BaseModel):
+    url: Optional[str] = None
+    token: Optional[str] = None
+    insecure_skip_verify: Optional[bool] = None
+
+class TestConnectionResponse(BaseModel):
+    success: bool
+    version: Optional[str] = None
+    error: Optional[str] = None

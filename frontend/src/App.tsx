@@ -12,7 +12,7 @@ import {
   WhatsAppStatus,
   AccessTemplate
 } from './types';
-import { Header } from './components/Header';
+import { Sidebar } from './components/Sidebar';
 import { OverviewCards } from './components/OverviewCards';
 import { SecurityBanner } from './components/SecurityBanner';
 import { AccessMatrix } from './components/AccessMatrix';
@@ -23,6 +23,7 @@ import { AuditLogDrawer } from './components/AuditLogDrawer';
 import { FlowGuideModal } from './components/FlowGuideModal';
 import { WhatsAppModal } from './components/WhatsAppModal';
 import { TemplateModal } from './components/TemplateModal';
+import { SettingsPanel } from './components/SettingsPanel';
 import { Lock, AlertCircle, CheckCircle } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -34,7 +35,7 @@ export const App: React.FC = () => {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [flowGuide, setFlowGuide] = useState<{ title: string; description: string; snippet: string } | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'matrix' | 'invites' | 'audit'>('matrix');
+  const [activeTab, setActiveTab] = useState<'matrix' | 'invites' | 'audit' | 'settings'>('matrix');
   const [stagedMode, setStagedMode] = useState<boolean>(false);
   const [stagedChanges, setStagedChanges] = useState<StagedChange[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -477,10 +478,10 @@ export const App: React.FC = () => {
   const unprotectedApps = matrixData ? matrixData.apps.filter((a) => !a.is_protected) : [];
 
   return (
-    <div className="min-h-screen bg-[#0b0f17] text-slate-100 flex flex-col font-sans selection:bg-orange-500/30 selection:text-orange-200">
+    <div className="min-h-screen bg-[#0b0f17] text-slate-100 flex flex-col md:flex-row font-sans selection:bg-orange-500/30 selection:text-orange-200">
       
-      {/* Header */}
-      <Header
+      {/* Left Sidebar Toolbar */}
+      <Sidebar
         health={health}
         auth={auth}
         whatsAppStatus={whatsAppStatus}
@@ -497,8 +498,8 @@ export const App: React.FC = () => {
         loading={loading}
       />
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      {/* Main Content Area */}
+      <main className="flex-1 min-w-0 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         
         {/* Unauthenticated Login Screen if password auth is active */}
         {auth && !auth.authenticated && auth.auth_method === 'password' && (
@@ -555,19 +556,22 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* KPI Cards */}
-            <OverviewCards
-              health={health}
-              onOpenProvisionModal={() => setIsProvisionModalOpen(true)}
-              onOpenInviteList={() => setActiveTab('invites')}
-            />
+            {/* KPI Cards and Security Alerts (shown on operational tabs) */}
+            {activeTab !== 'settings' && (
+              <>
+                <OverviewCards
+                  health={health}
+                  onOpenProvisionModal={() => setIsProvisionModalOpen(true)}
+                  onOpenInviteList={() => setActiveTab('invites')}
+                />
 
-            {/* Security Alert Banner for Open Services */}
-            <SecurityBanner
-              unprotectedApps={unprotectedApps}
-              onLockdown={handleProvisionAll}
-              loading={loading}
-            />
+                <SecurityBanner
+                  unprotectedApps={unprotectedApps}
+                  onLockdown={handleProvisionAll}
+                  loading={loading}
+                />
+              </>
+            )}
 
             {/* Content Tabs */}
             {activeTab === 'matrix' && matrixData && (
@@ -624,6 +628,13 @@ export const App: React.FC = () => {
                   ))}
                 </div>
               </div>
+            )}
+
+            {activeTab === 'settings' && (
+              <SettingsPanel
+                onShowToast={showToast}
+                onSettingsUpdated={loadData}
+              />
             )}
           </>
         )}

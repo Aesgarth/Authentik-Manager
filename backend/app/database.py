@@ -69,6 +69,14 @@ async def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                is_secret INTEGER DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+        """)
         
         # Safely migrate existing databases if columns do not exist
         for col, col_type in [("phone", "TEXT"), ("whatsapp_sent", "INTEGER DEFAULT 0")]:
@@ -287,3 +295,38 @@ async def delete_access_template(template_id: int) -> bool:
         cursor = await db.execute("DELETE FROM access_templates WHERE id = ?", (template_id,))
         await db.commit()
         return cursor.rowcount > 0
+
+# --- App Settings ---
+
+async def get_all_app_settings() -> Dict[str, Dict[str, Any]]:
+    db_path = get_db_path()
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM app_settings") as cursor:
+            rows = await cursor.fetchall()
+            return {row["key"]: dict(row) for row in rows}
+
+async def get_app_setting(key: str) -> Optional[Dict[str, Any]]:
+    db_path = get_db_path()
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM app_settings WHERE key = ?", (key,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+async def set_app_setting(key: str, value: str, is_secret: bool = False):
+    db_path = get_db_path()
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            INSERT INTO app_settings (key, value, is_secret, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                is_secret = excluded.is_secret,
+                updated_at = excluded.updated_at
+            """,
+            (key, value, 1 if is_secret else 0, now)
+        )
+        await db.commit()

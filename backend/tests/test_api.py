@@ -246,4 +246,56 @@ async def test_access_templates():
         apply_data = apply_res.json()
         assert apply_data["applied_count"] >= 1
 
+@pytest.mark.asyncio
+async def test_settings_api():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Get settings
+        get_res = await client.get("/api/settings")
+        assert get_res.status_code == 200
+        data = get_res.json()
+        assert "authentik_url" in data
+        assert "app_group_prefix" in data
+
+        # Update settings with a secret token
+        put_res = await client.put(
+            "/api/settings",
+            json={
+                "authentik_url": "https://auth.company.test",
+                "authentik_token": "super_secret_test_token_12345",
+                "app_group_prefix": "Secured - ",
+                "default_country_code": "1",
+                "default_lease_duration_hours": 48
+            }
+        )
+        assert put_res.status_code == 200
+        updated = put_res.json()
+        assert updated["authentik_url"] == "https://auth.company.test"
+        assert updated["app_group_prefix"] == "Secured - "
+        assert updated["default_country_code"] == "1"
+        assert updated["default_lease_duration_hours"] == 48
+        # Token should be masked in response
+        assert updated["authentik_token_masked"].startswith("••••••••")
+        assert updated["authentik_token_configured"] is True
+
+        # Verify token in SQLite is encrypted, not raw plaintext
+        from app.database import get_app_setting
+        row = await get_app_setting("authentik_token")
+        assert row is not None
+        assert row["is_secret"] == 1
+        assert "super_secret_test_token_12345" not in row["value"]
+
+        # Verify test authentik connection endpoint
+        test_res = await client.post(
+            "/api/settings/test-authentik",
+            json={
+                "url": "https://auth.company.test",
+                "token": "super_secret_test_token_12345"
+            }
+        )
+        assert test_res.status_code == 200
+        test_data = test_res.json()
+        assert "success" in test_data
+
+
 

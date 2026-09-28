@@ -138,3 +138,40 @@ export interface AuditLog {
   details?: string;
   status: string;
 }
+
+export interface AppSettings {
+  authentik_url: string;
+  authentik_token_masked: string;
+  authentik_token_configured: boolean;
+  authentik_insecure_skip_verify: boolean;
+  app_group_prefix: string;
+  default_enrollment_flow: string;
+  whatsapp_enabled: boolean;
+  whatsapp_service_url: string;
+  default_country_code: string;
+  custom_invite_message?: string | null;
+  notification_webhook_url?: string | null;
+  default_lease_duration_hours: number;
+  default_invite_expiry_days: number;
+}
+
+export interface UpdateSettingsPayload {
+  authentik_url?: string;
+  authentik_token?: string;
+  authentik_insecure_skip_verify?: boolean;
+  app_group_prefix?: string;
+  default_enrollment_flow?: string;
+  whatsapp_enabled?: boolean;
+  whatsapp_service_url?: string;
+  default_country_code?: string;
+  custom_invite_message?: string | null;
+  notification_webhook_url?: string | null;
+  default_lease_duration_hours?: number;
+  default_invite_expiry_days?: number;
+}
+
+export interface TestConnectionResult {
+  success: boolean;
+  version?: string | null;
+  error?: string | null;
+}

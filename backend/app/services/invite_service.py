@@ -267,6 +267,17 @@ class InviteService:
                 )
                 redeemed_count += 1
 
+                try:
+                    assigned_apps_list = json.loads(invite["assigned_apps"])
+                    from app.services.notification_service import notification_service
+                    await notification_service.notify_invite_redeemed(
+                        user_name=matched_user.get("name") or username,
+                        user_email=matched_user.get("email"),
+                        assigned_apps=assigned_apps_list
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to dispatch redemption notification: {e}")
+
         return redeemed_count
 
     @staticmethod

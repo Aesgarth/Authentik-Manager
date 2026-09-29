@@ -116,6 +116,45 @@ export class WhatsAppManager {
           }
         }
       });
+
+      this.sock.ev.on('messages.upsert', async (m) => {
+        if (!this.sock) return;
+        for (const msg of m.messages) {
+          if (!msg.message) continue;
+          const remoteJid = msg.key.remoteJid;
+          if (!remoteJid || remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast') continue;
+
+          const isSelf = this.connectedPhone && (remoteJid.includes(this.connectedPhone) || remoteJid.split('@')[0] === this.connectedPhone);
+          if (msg.key.fromMe && !isSelf) {
+            continue;
+          }
+
+          const text =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            '';
+          const trimmed = text.trim();
+          if (trimmed.startsWith('!') || trimmed.startsWith('/')) {
+            const sender = remoteJid.split('@')[0].split(':')[0];
+            try {
+              const backendUrl = process.env.BACKEND_INTERNAL_URL || 'http://127.0.0.1:8000';
+              const res = await fetch(`${backendUrl}/api/whatsapp/bot-command`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sender, message: trimmed }),
+              });
+              if (res.ok) {
+                const data = (await res.json()) as { reply?: string; executed: boolean };
+                if (data.reply) {
+                  await this.sock.sendMessage(remoteJid, { text: data.reply });
+                }
+              }
+            } catch (cmdErr) {
+              console.error('[WhatsApp Bot] Error dispatching bot command:', cmdErr);
+            }
+          }
+        }
+      });
     } catch (err) {
       console.error('[WhatsApp] Initialization error:', err);
       this.status = 'disconnected';

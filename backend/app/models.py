@@ -246,6 +246,9 @@ class SettingsResponse(BaseModel):
     default_country_code: str
     custom_invite_message: Optional[str] = None
     notification_webhook_url: Optional[str] = None
+    ntfy_topic: Optional[str] = None
+    ntfy_server_url: str = "https://ntfy.sh"
+    admin_phone_numbers: Optional[str] = None
     default_lease_duration_hours: int = 72
     default_invite_expiry_days: int = 7
 
@@ -260,6 +263,9 @@ class UpdateSettingsRequest(BaseModel):
     default_country_code: Optional[str] = None
     custom_invite_message: Optional[str] = None
     notification_webhook_url: Optional[str] = None
+    ntfy_topic: Optional[str] = None
+    ntfy_server_url: Optional[str] = None
+    admin_phone_numbers: Optional[str] = None
     default_lease_duration_hours: Optional[int] = None
     default_invite_expiry_days: Optional[int] = None
 
@@ -272,3 +278,19 @@ class TestConnectionResponse(BaseModel):
     success: bool
     version: Optional[str] = None
     error: Optional[str] = None
+
+class TestNotificationRequest(BaseModel):
+    channel: str = "all" # 'all', 'ntfy', 'webhook'
+
+class TestNotificationResponse(BaseModel):
+    success: bool
+    results: Dict[str, Any]
+
+class BotCommandRequest(BaseModel):
+    sender: str
+    message: str
+
+class BotCommandResponse(BaseModel):
+    reply: Optional[str] = None
+    executed: bool = False
+

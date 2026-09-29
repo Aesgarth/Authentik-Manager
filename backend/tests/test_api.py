@@ -297,5 +297,77 @@ async def test_settings_api():
         test_data = test_res.json()
         assert "success" in test_data
 
+@pytest.mark.asyncio
+async def test_csv_export():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/api/matrix/export/csv")
+        assert res.status_code == 200
+        assert "text/csv" in res.headers["content-type"]
+        csv_text = res.text
+        assert "Username,Email,Role,Last Login" in csv_text
+        assert "guest_charlie" in csv_text
+        assert "alex" in csv_text
+
+@pytest.mark.asyncio
+async def test_notification_and_bot_api():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Test notification endpoint
+        notif_res = await client.post("/api/settings/test-notification", json={"channel": "all"})
+        assert notif_res.status_code == 200
+        assert "results" in notif_res.json()
+
+        # 2. Test bot command from unauthorized phone
+        unauth_res = await client.post(
+            "/api/whatsapp/bot-command",
+            json={"sender": "447999888777", "message": "!status"}
+        )
+        assert unauth_res.status_code == 200
+        unauth_data = unauth_res.json()
+        assert "Unauthorized" in unauth_data["reply"] or "Disabled" in unauth_data["reply"]
+
+        # 3. Configure admin phone number
+        await client.put(
+            "/api/settings",
+            json={"admin_phone_numbers": "+44 7999 888 777"}
+        )
+
+        # 4. Test !help
+        help_res = await client.post(
+            "/api/whatsapp/bot-command",
+            json={"sender": "447999888777", "message": "!help"}
+        )
+        assert help_res.status_code == 200
+        assert "Available Commands" in help_res.json()["reply"]
+
+        # 5. Test !status
+        status_res = await client.post(
+            "/api/whatsapp/bot-command",
+            json={"sender": "447999888777", "message": "!status"}
+        )
+        assert status_res.status_code == 200
+        assert "Authentik Manager Status" in status_res.json()["reply"]
+
+        # 6. Test !presets
+        presets_res = await client.post(
+            "/api/whatsapp/bot-command",
+            json={"sender": "447999888777", "message": "!presets"}
+        )
+        assert presets_res.status_code == 200
+        assert "Available Access Presets" in presets_res.json()["reply"] or "No access presets" in presets_res.json()["reply"]
+
+        # 7. Test !invite
+        invite_res = await client.post(
+            "/api/whatsapp/bot-command",
+            json={"sender": "447999888777", "message": "!invite John Jellyfin 5"}
+        )
+        assert invite_res.status_code == 200
+        inv_data = invite_res.json()
+        assert "Invitation Generated" in inv_data["reply"]
+        assert "John" in inv_data["reply"]
+        assert "itoken=" in inv_data["reply"]
+
+
 
 

@@ -14,9 +14,11 @@ import {
   Clock,
   ExternalLink,
   Grid,
-  Layers
+  Layers,
+  Download
 } from 'lucide-react';
 import { AccessMatrixData, User, Application, StagedChange, ExpiringGrant } from '../types';
+import { api } from '../api/client';
 
 interface AccessMatrixProps {
   data: AccessMatrixData;
@@ -57,8 +59,9 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
   const [viewMode, setViewMode] = useState<'matrix' | 'apps'>('matrix');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [userFilter, setUserFilter] = useState<'all' | 'admin' | 'active' | 'inactive'>('all');
+  const [userFilter, setUserFilter] = useState<'all' | 'admin' | 'active' | 'inactive' | 'dormant'>('all');
   const [provisioningAll, setProvisioningAll] = useState(false);
+  const [exportingCsv, setExportingCsv] = useState(false);
   const [popover, setPopover] = useState<ActivePopover | null>(null);
 
   // Popover Temporary Access Lease state
@@ -66,6 +69,30 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
   const [selectedDurationHours, setSelectedDurationHours] = useState<number>(24);
 
   const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  // Determine if a user has not logged in for 30+ days or never logged in
+  const isDormantUser = (u: User) => {
+    if (!u.last_login) return true; // Never logged in
+    const lastLoginMs = new Date(u.last_login).getTime();
+    if (isNaN(lastLoginMs)) return true;
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    return lastLoginMs < thirtyDaysAgo;
+  };
+
+  const dormantCount = useMemo(() => {
+    return data.users.filter(isDormantUser).length;
+  }, [data.users]);
+
+  const handleExportCsv = async () => {
+    setExportingCsv(true);
+    try {
+      await api.exportMatrixCsv();
+    } catch (err: any) {
+      console.error('Failed to export matrix CSV:', err);
+    } finally {
+      setExportingCsv(false);
+    }
+  };
 
   // Close popover on outside click or escape key
   useEffect(() => {
@@ -125,6 +152,7 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
       if (userFilter === 'admin' && !u.is_superuser) return false;
       if (userFilter === 'active' && !u.is_active) return false;
       if (userFilter === 'inactive' && u.is_active) return false;
+      if (userFilter === 'dormant' && !isDormantUser(u)) return false;
 
       return matchesSearch;
     });
@@ -327,8 +355,36 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
                   {filter}
                 </button>
               ))}
+
+              {/* Inactive (30d+ / Never) Spotlight Chip */}
+              <button
+                onClick={() => setUserFilter(userFilter === 'dormant' ? 'all' : 'dormant')}
+                className={`flex items-center space-x-1.5 px-2 py-1 rounded-md text-[11px] font-medium transition-all ${
+                  userFilter === 'dormant'
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold shadow-sm'
+                    : 'text-slate-400 hover:text-amber-300 hover:bg-[#1e2c3f]'
+                }`}
+                title="Filter accounts that have not logged in for over 30 days or never logged in"
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${userFilter === 'dormant' ? 'bg-amber-400 animate-pulse' : 'bg-amber-500/60'}`} />
+                <span>Inactive (30d+)</span>
+                <span className="text-[10px] bg-amber-500/10 text-amber-400 px-1 rounded border border-amber-500/20 font-mono">
+                  {dormantCount}
+                </span>
+              </button>
             </div>
           )}
+
+          {/* Export Matrix CSV Button */}
+          <button
+            onClick={handleExportCsv}
+            disabled={exportingCsv}
+            className="flex items-center space-x-1.5 bg-[#0b0f17] hover:bg-[#1e2c3f] disabled:opacity-50 text-slate-300 hover:text-[#fd7e14] text-xs px-2.5 py-1.5 rounded-lg border border-[#25354b] transition-colors shrink-0"
+            title="Export complete Users × Applications access matrix to CSV"
+          >
+            <Download className={`h-3.5 w-3.5 ${exportingCsv ? 'animate-bounce text-[#fd7e14]' : 'text-slate-400'}`} />
+            <span className="hidden sm:inline font-medium">{exportingCsv ? 'Exporting...' : 'Export CSV'}</span>
+          </button>
         </div>
 
       </div>

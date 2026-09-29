@@ -9,7 +9,8 @@ import {
   AccessTemplate,
   AppSettings,
   UpdateSettingsPayload,
-  TestConnectionResult
+  TestConnectionResult,
+  TestNotificationResult
 } from '../types';
 
 const API_BASE = '/api';
@@ -301,5 +302,29 @@ export const api = {
     });
     if (!res.ok) throw new Error('Failed to test Authentik connection');
     return res.json();
+  },
+
+  async testNotification(channel: string = 'all'): Promise<TestNotificationResult> {
+    const res = await fetch(`${API_BASE}/settings/test-notification`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel }),
+    });
+    if (!res.ok) throw new Error('Failed to dispatch test notification');
+    return res.json();
+  },
+
+  async exportMatrixCsv(): Promise<void> {
+    const res = await fetch(`${API_BASE}/matrix/export/csv`);
+    if (!res.ok) throw new Error('Failed to export matrix CSV');
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `authentik_matrix_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
   },
 };

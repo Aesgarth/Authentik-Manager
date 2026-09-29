@@ -151,6 +151,9 @@ export interface AppSettings {
   default_country_code: string;
   custom_invite_message?: string | null;
   notification_webhook_url?: string | null;
+  ntfy_topic?: string | null;
+  ntfy_server_url: string;
+  admin_phone_numbers?: string | null;
   default_lease_duration_hours: number;
   default_invite_expiry_days: number;
 }
@@ -166,6 +169,9 @@ export interface UpdateSettingsPayload {
   default_country_code?: string;
   custom_invite_message?: string | null;
   notification_webhook_url?: string | null;
+  ntfy_topic?: string | null;
+  ntfy_server_url?: string | null;
+  admin_phone_numbers?: string | null;
   default_lease_duration_hours?: number;
   default_invite_expiry_days?: number;
 }
@@ -175,3 +181,9 @@ export interface TestConnectionResult {
   version?: string | null;
   error?: string | null;
 }
+
+export interface TestNotificationResult {
+  success: boolean;
+  results: Record<string, any>;
+}
+

@@ -1,7 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import get_current_user
-from app.models import WhatsAppStatusResponse, WhatsAppSendRequest, WhatsAppSendResponse
+from app.models import (
+    WhatsAppStatusResponse,
+    WhatsAppSendRequest,
+    WhatsAppSendResponse,
+    BotCommandRequest,
+    BotCommandResponse,
+)
 from app.services.whatsapp_service import whatsapp_service
+from app.services.bot_service import bot_service
 from app.services.audit_service import audit_service
 
 router = APIRouter(prefix="/api/whatsapp", tags=["WhatsApp"])
@@ -54,3 +61,9 @@ async def logout_whatsapp(current_user: dict = Depends(get_current_user)):
         return res
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/bot-command", response_model=BotCommandResponse)
+async def handle_bot_command(req: BotCommandRequest):
+    reply = await bot_service.process_message(sender=req.sender, raw_message=req.message)
+    return BotCommandResponse(reply=reply, executed=reply is not None)
+

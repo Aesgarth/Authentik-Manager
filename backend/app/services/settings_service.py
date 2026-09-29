@@ -18,6 +18,9 @@ class SettingsService:
         self._fernet = Fernet(base64.urlsafe_b64encode(key_digest))
         self._custom_invite_message: Optional[str] = None
         self._notification_webhook_url: Optional[str] = None
+        self._ntfy_topic: Optional[str] = None
+        self._ntfy_server_url: str = "https://ntfy.sh"
+        self._admin_phone_numbers: Optional[str] = None
         self._default_lease_duration_hours: int = 72
         self._default_invite_expiry_days: int = 7
 
@@ -65,6 +68,12 @@ class SettingsService:
                     self._custom_invite_message = val
                 elif key == "notification_webhook_url":
                     self._notification_webhook_url = val
+                elif key == "ntfy_topic":
+                    self._ntfy_topic = val
+                elif key == "ntfy_server_url" and val:
+                    self._ntfy_server_url = val
+                elif key == "admin_phone_numbers":
+                    self._admin_phone_numbers = val
                 elif key == "default_lease_duration_hours" and val:
                     try:
                         self._default_lease_duration_hours = int(val)
@@ -80,6 +89,14 @@ class SettingsService:
             from app.services.whatsapp_service import whatsapp_service
             whatsapp_service.enabled = settings.WHATSAPP_ENABLED
             whatsapp_service.base_url = settings.WHATSAPP_SERVICE_URL.rstrip("/")
+
+            # Sync notification_service instance
+            from app.services.notification_service import notification_service
+            notification_service.configure(
+                ntfy_topic=self._ntfy_topic,
+                ntfy_server_url=self._ntfy_server_url,
+                webhook_url=self._notification_webhook_url
+            )
 
             logger.info("Successfully loaded system settings from local database.")
         except Exception as e:
@@ -107,6 +124,9 @@ class SettingsService:
             default_country_code=settings.DEFAULT_COUNTRY_CODE,
             custom_invite_message=self._custom_invite_message,
             notification_webhook_url=self._notification_webhook_url,
+            ntfy_topic=self._ntfy_topic,
+            ntfy_server_url=self._ntfy_server_url,
+            admin_phone_numbers=self._admin_phone_numbers,
             default_lease_duration_hours=self._default_lease_duration_hours,
             default_invite_expiry_days=self._default_invite_expiry_days,
         )
@@ -170,6 +190,22 @@ class SettingsService:
             self._notification_webhook_url = req.notification_webhook_url.strip()
             updated_keys.append("notification_webhook_url")
 
+        if req.ntfy_topic is not None:
+            await set_app_setting("ntfy_topic", req.ntfy_topic.strip())
+            self._ntfy_topic = req.ntfy_topic.strip()
+            updated_keys.append("ntfy_topic")
+
+        if req.ntfy_server_url is not None:
+            clean_ntfy = req.ntfy_server_url.strip().rstrip("/")
+            await set_app_setting("ntfy_server_url", clean_ntfy)
+            self._ntfy_server_url = clean_ntfy
+            updated_keys.append("ntfy_server_url")
+
+        if req.admin_phone_numbers is not None:
+            await set_app_setting("admin_phone_numbers", req.admin_phone_numbers.strip())
+            self._admin_phone_numbers = req.admin_phone_numbers.strip()
+            updated_keys.append("admin_phone_numbers")
+
         if req.default_lease_duration_hours is not None:
             await set_app_setting("default_lease_duration_hours", str(req.default_lease_duration_hours))
             self._default_lease_duration_hours = req.default_lease_duration_hours
@@ -185,6 +221,13 @@ class SettingsService:
         whatsapp_service.enabled = settings.WHATSAPP_ENABLED
         whatsapp_service.base_url = settings.WHATSAPP_SERVICE_URL.rstrip("/")
 
+        from app.services.notification_service import notification_service
+        notification_service.configure(
+            ntfy_topic=self._ntfy_topic,
+            ntfy_server_url=self._ntfy_server_url,
+            webhook_url=self._notification_webhook_url
+        )
+
         await audit_service.log(
             actor=actor,
             action="UPDATE_SYSTEM_SETTINGS",
@@ -197,7 +240,22 @@ class SettingsService:
 
         return await self.get_settings_response()
 
-    async def test_authentik_connection(self, req: TestConnectionRequest) -> TestConnectionResponse:
+    async def test_notification(self, channel: str = "all") -> Dict[str, Any]:
+        from app.services.notification_service import notification_service
+        return await notification_service.send_notification(
+            title="🔔 Authentik Manager Test Alert",
+            message="Push notifications are properly connected! You will receive live alerts when invites are claimed or guest passes expire.",
+            tags=["bell", "tada"],
+            priority="default"
+        )
+
+    async def test_authentik_connection(self, req: Optional[TestConnectionRequest] = None) -> TestConnectionResponse:
+        if req is None:
+            req = TestConnectionRequest()
+
+        if settings.DEMO_MODE:
+            return TestConnectionResponse(success=True, version="2024.8.3 (Demo)")
+
         url = (req.url or settings.AUTHENTIK_URL).strip().rstrip("/")
         token = req.token or settings.AUTHENTIK_TOKEN
         # If the user passed masked token, fallback to current settings.AUTHENTIK_TOKEN

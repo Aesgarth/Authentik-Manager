@@ -107,6 +107,8 @@ class LeaseService:
                     details=f"Temporary {role.upper()} access grant reached expiration ({grant['expires_at']}) and was revoked automatically.",
                     status="SUCCESS"
                 )
+                from app.services.notification_service import notification_service
+                await notification_service.notify_lease_expired(user_name=u_name, app_name=a_name, role=role)
                 logger.info(f"Automatically expired lease for user {u_name} ({u_pk}) on {a_name}")
             except Exception as e:
                 logger.error(f"Failed to auto-expire grant {grant_id} for user {u_pk}: {e}")

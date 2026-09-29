@@ -11,10 +11,13 @@ import {
   Activity,
   CheckCircle2,
   XCircle,
-  HelpCircle
+  HelpCircle,
+  Smartphone,
+  Radio,
+  Send
 } from 'lucide-react';
 import { api } from '../api/client';
-import { UpdateSettingsPayload } from '../types';
+import { UpdateSettingsPayload, TestNotificationResult } from '../types';
 
 interface SettingsPanelProps {
   onShowToast: (message: string, type?: 'success' | 'error' | 'info') => void;
@@ -30,6 +33,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [testingConnection, setTestingConnection] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
 
+  const [testingNotification, setTestingNotification] = useState(false);
+  const [testNotifResult, setTestNotifResult] = useState<TestNotificationResult | null>(null);
+
   // Form Fields
   const [authentikUrl, setAuthentikUrl] = useState('');
   const [authentikToken, setAuthentikToken] = useState('');
@@ -43,8 +49,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [whatsappEnabled, setWhatsappEnabled] = useState(true);
   const [whatsappServiceUrl, setWhatsappServiceUrl] = useState('http://127.0.0.1:3001');
   const [defaultCountryCode, setDefaultCountryCode] = useState('44');
+  const [adminPhoneNumbers, setAdminPhoneNumbers] = useState('');
   const [customInviteMessage, setCustomInviteMessage] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
+  const [ntfyTopic, setNtfyTopic] = useState('');
+  const [ntfyServerUrl, setNtfyServerUrl] = useState('https://ntfy.sh');
 
   const [defaultLeaseHours, setDefaultLeaseHours] = useState(72);
   const [defaultInviteDays, setDefaultInviteDays] = useState(7);
@@ -67,8 +76,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       setWhatsappEnabled(s.whatsapp_enabled);
       setWhatsappServiceUrl(s.whatsapp_service_url || 'http://127.0.0.1:3001');
       setDefaultCountryCode(s.default_country_code || '44');
+      setAdminPhoneNumbers(s.admin_phone_numbers || '');
       setCustomInviteMessage(s.custom_invite_message || '');
       setWebhookUrl(s.notification_webhook_url || '');
+      setNtfyTopic(s.ntfy_topic || '');
+      setNtfyServerUrl(s.ntfy_server_url || 'https://ntfy.sh');
 
       setDefaultLeaseHours(s.default_lease_duration_hours || 72);
       setDefaultInviteDays(s.default_invite_expiry_days || 7);
@@ -103,6 +115,25 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     }
   };
 
+  const handleTestNotification = async () => {
+    setTestingNotification(true);
+    setTestNotifResult(null);
+    try {
+      const res = await api.testNotification('all');
+      setTestNotifResult(res);
+      if (res.success) {
+        onShowToast('Test push notification dispatched successfully!', 'success');
+      } else {
+        const errDetail = res.results?.status || res.results?.ntfy?.error || res.results?.webhook?.error || 'No channels configured';
+        onShowToast(`Push notification warning: ${errDetail}`, 'error');
+      }
+    } catch (err: any) {
+      onShowToast(err.message || 'Failed to dispatch test notification', 'error');
+    } finally {
+      setTestingNotification(false);
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -115,8 +146,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         whatsapp_enabled: whatsappEnabled,
         whatsapp_service_url: whatsappServiceUrl,
         default_country_code: defaultCountryCode,
+        admin_phone_numbers: adminPhoneNumbers.trim() || null,
         custom_invite_message: customInviteMessage || null,
-        notification_webhook_url: webhookUrl || null,
+        notification_webhook_url: webhookUrl.trim() || null,
+        ntfy_topic: ntfyTopic.trim() || null,
+        ntfy_server_url: ntfyServerUrl.trim() || 'https://ntfy.sh',
         default_lease_duration_hours: Number(defaultLeaseHours),
         default_invite_expiry_days: Number(defaultInviteDays),
       };
@@ -129,6 +163,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       const updated = await api.updateSettings(payload);
       setTokenMasked(updated.authentik_token_masked);
       setTokenConfigured(updated.authentik_token_configured);
+
       setAuthentikToken(''); // Clear input after saving
       onShowToast('Settings updated successfully and saved to encrypted database!', 'success');
       if (onSettingsUpdated) onSettingsUpdated();
@@ -367,6 +402,24 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             <p className="text-[10px] text-slate-500">Auto-prefixed to phone numbers without international code.</p>
           </div>
 
+          {/* Admin Phone Numbers for WhatsApp Bot */}
+          <div className="space-y-1.5">
+            <div className="flex items-center space-x-1.5">
+              <Smartphone className="h-3.5 w-3.5 text-emerald-400" />
+              <label className="text-xs font-medium text-slate-300">Authorized WhatsApp Admin Phones (Bot Commands)</label>
+            </div>
+            <input
+              type="text"
+              value={adminPhoneNumbers}
+              onChange={(e) => setAdminPhoneNumbers(e.target.value)}
+              placeholder="+44 7123 456789, +1 555 123 4567, *"
+              className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14] font-mono"
+            />
+            <p className="text-[10px] text-slate-500">
+              Numbers permitted to text bot commands (<code className="text-emerald-400">!invite &lt;Name&gt; &lt;Preset/Apps&gt; [days]</code>, <code className="text-emerald-400">!status</code>, <code className="text-emerald-400">!presets</code>, <code className="text-emerald-400">!help</code>). Comma-separated.
+            </p>
+          </div>
+
           {/* Custom Invite Template */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-slate-300">Custom Invitation Message Template</label>
@@ -382,11 +435,50 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             </p>
           </div>
 
+          {/* NTFY Push Notifications */}
+          <div className="pt-2 border-t border-[#25354b] space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Radio className="h-4 w-4 text-sky-400" />
+                <span className="text-xs font-bold text-white">NTFY Push Notifications (Phone Lock Screen)</span>
+              </div>
+              <span className="text-[10px] text-sky-400 font-mono bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/20">
+                iOS & Android / Free
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300">NTFY Topic</label>
+                <input
+                  type="text"
+                  value={ntfyTopic}
+                  onChange={(e) => setNtfyTopic(e.target.value)}
+                  placeholder="my-home-authentik-alerts"
+                  className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14] font-mono"
+                />
+                <p className="text-[10px] text-slate-500">Topic name to subscribe to in the NTFY app.</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300">NTFY Server URL</label>
+                <input
+                  type="url"
+                  value={ntfyServerUrl}
+                  onChange={(e) => setNtfyServerUrl(e.target.value)}
+                  placeholder="https://ntfy.sh"
+                  className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14] font-mono"
+                />
+                <p className="text-[10px] text-slate-500">Public ntfy.sh or your self-hosted server.</p>
+              </div>
+            </div>
+          </div>
+
           {/* Notification Webhook */}
           <div className="space-y-1.5 pt-2 border-t border-[#25354b]">
             <div className="flex items-center space-x-1.5">
               <Bell className="h-3.5 w-3.5 text-amber-400" />
-              <label className="text-xs font-medium text-slate-300">Security & Expiry Webhook URL (Optional)</label>
+              <label className="text-xs font-medium text-slate-300">Security & Expiry Webhook URL (Discord / Slack / Generic)</label>
             </div>
             <input
               type="url"
@@ -396,6 +488,34 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14]"
             />
             <p className="text-[10px] text-slate-500">Sends alerts when guest passes expire or invites are redeemed.</p>
+          </div>
+
+          {/* Test Push Alert Action Button */}
+          <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-[#25354b]">
+            <button
+              type="button"
+              onClick={handleTestNotification}
+              disabled={testingNotification || (!ntfyTopic && !webhookUrl)}
+              className="flex items-center space-x-1.5 bg-[#1e2c3f] hover:bg-[#25354b] disabled:opacity-50 text-slate-200 text-xs px-3.5 py-2 rounded-xl border border-[#2c3f58] transition-colors"
+            >
+              <Send className={`h-3.5 w-3.5 text-sky-400 ${testingNotification ? 'animate-spin' : ''}`} />
+              <span>{testingNotification ? 'Dispatching Test Push...' : 'Send Test Push Alert'}</span>
+            </button>
+            {testNotifResult && (
+              <div className="flex items-center space-x-2 text-[11px]">
+                {testNotifResult.success ? (
+                  <span className="flex items-center space-x-1 text-emerald-400 font-medium">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    <span>Push alert sent successfully!</span>
+                  </span>
+                ) : (
+                  <span className="flex items-center space-x-1 text-rose-400 font-medium">
+                    <XCircle className="h-3.5 w-3.5" />
+                    <span>{testNotifResult.results?.status || 'Failed to dispatch alert'}</span>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
         </div>

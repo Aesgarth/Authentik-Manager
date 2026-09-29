@@ -1,4 +1,8 @@
+import csv
+import io
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from app.auth import get_current_user
 from app.models import (
     AccessMatrixResponse,
@@ -56,3 +60,52 @@ async def revoke_lease(
     actor = current_user.get("username", "Admin")
     success = await lease_service.revoke_lease(req, actor=actor)
     return {"status": "success", "revoked": success}
+
+@router.get("/export/csv")
+async def export_matrix_csv(current_user: dict = Depends(get_current_user)):
+    matrix = await matrix_service.get_matrix()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Headers: Username, Email, Role, Last Login, followed by each Application Name
+    app_headers = [app.name for app in matrix.apps]
+    writer.writerow(["Username", "Email", "Role", "Last Login"] + app_headers)
+
+    for u in matrix.users:
+        user_pk_str = str(u.pk)
+        role = "Superuser" if u.is_superuser else "User"
+        last_login_str = u.last_login or "Never"
+
+        row = [u.username, u.email or "", role, last_login_str]
+        for app in matrix.apps:
+            app_pk_str = str(app.pk)
+            has_access = matrix.permissions.get(user_pk_str, {}).get(app_pk_str, False)
+            is_admin = matrix.admin_permissions.get(user_pk_str, {}).get(app_pk_str, False)
+            inherited = matrix.inherited_access.get(user_pk_str, {}).get(app_pk_str, [])
+            expiring = matrix.expiring_grants.get(user_pk_str, {}).get(app_pk_str)
+
+            if not has_access:
+                val = "No Access"
+            elif is_admin:
+                val = "Admin"
+                if expiring:
+                    val += f" (Temporary - Expires: {expiring.expires_at})"
+            elif inherited:
+                val = f"Inherited ({', '.join(inherited)})"
+            elif expiring:
+                val = f"Temporary Member (Expires: {expiring.expires_at})"
+            else:
+                val = "Member"
+            row.append(val)
+        writer.writerow(row)
+
+    csv_content = output.getvalue()
+    filename = f"authentik_access_matrix_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+

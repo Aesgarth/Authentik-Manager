@@ -11,14 +11,18 @@ import {
   Activity,
   CheckCircle2,
   XCircle,
-  HelpCircle,
   Smartphone,
   Radio,
   Send,
-  Bot
+  Bot,
+  ShieldCheck,
+  Sparkles,
+  ExternalLink,
+  RefreshCw
 } from 'lucide-react';
 import { api } from '../api/client';
 import { UpdateSettingsPayload, TestNotificationResult, TestTelegramResult } from '../types';
+import { OidcSetupModal } from './OidcSetupModal';
 
 interface SettingsPanelProps {
   onShowToast: (message: string, type?: 'success' | 'error' | 'info') => void;
@@ -70,6 +74,23 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [defaultLeaseHours, setDefaultLeaseHours] = useState(72);
   const [defaultInviteDays, setDefaultInviteDays] = useState(7);
 
+  // Security & OIDC Settings
+  const [authMethod, setAuthMethod] = useState<'none' | 'password' | 'forward_auth' | 'oidc'>('none');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
+  const [adminPasswordConfigured, setAdminPasswordConfigured] = useState(false);
+  const [appUrl, setAppUrl] = useState('');
+  const [oidcClientId, setOidcClientId] = useState('');
+  const [oidcClientSecret, setOidcClientSecret] = useState('');
+  const [showOidcSecret, setShowOidcSecret] = useState(false);
+  const [oidcClientSecretMasked, setOidcClientSecretMasked] = useState('');
+  const [oidcClientSecretConfigured, setOidcClientSecretConfigured] = useState(false);
+  const [oidcIssuerUrl, setOidcIssuerUrl] = useState('');
+  const [oidcRedirectUri, setOidcRedirectUri] = useState('');
+  const [oidcAdminGroup, setOidcAdminGroup] = useState('authentik Admins');
+  const [oidcConfigured, setOidcConfigured] = useState(false);
+  const [isOidcModalOpen, setIsOidcModalOpen] = useState(false);
+
   useEffect(() => {
     loadSettings();
   }, []);
@@ -101,6 +122,18 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
       setDefaultLeaseHours(s.default_lease_duration_hours || 72);
       setDefaultInviteDays(s.default_invite_expiry_days || 7);
+
+      // OIDC & Security
+      setAuthMethod(s.auth_method || 'none');
+      setAdminPasswordConfigured(s.admin_password_configured);
+      setAppUrl(s.app_url || window.location.origin);
+      setOidcClientId(s.oidc_client_id || '');
+      setOidcClientSecretMasked(s.oidc_client_secret_masked || '');
+      setOidcClientSecretConfigured(s.oidc_client_secret_configured);
+      setOidcIssuerUrl(s.oidc_issuer_url || '');
+      setOidcRedirectUri(s.oidc_redirect_uri || '');
+      setOidcAdminGroup(s.oidc_admin_group || 'authentik Admins');
+      setOidcConfigured(s.oidc_configured);
     } catch (err: any) {
       onShowToast(err.message || 'Failed to load settings', 'error');
     } finally {
@@ -190,9 +223,16 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         telegram_admin_chat_ids: telegramAdminChatIds.trim() || null,
         default_lease_duration_hours: Number(defaultLeaseHours),
         default_invite_expiry_days: Number(defaultInviteDays),
+        // OIDC & Security
+        auth_method: authMethod,
+        app_url: appUrl.trim() || undefined,
+        oidc_client_id: oidcClientId.trim() || undefined,
+        oidc_issuer_url: oidcIssuerUrl.trim() || undefined,
+        oidc_redirect_uri: oidcRedirectUri.trim() || undefined,
+        oidc_admin_group: oidcAdminGroup.trim() || undefined,
       };
 
-      // Only include token if user entered a new one
+      // Only include secrets if user entered new ones
       if (authentikToken.trim()) {
         payload.authentik_token = authentikToken.trim();
       }
@@ -201,12 +241,27 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         payload.telegram_bot_token = telegramToken.trim();
       }
 
+      if (adminPassword.trim()) {
+        payload.admin_password = adminPassword.trim();
+      }
+
+      if (oidcClientSecret.trim()) {
+        payload.oidc_client_secret = oidcClientSecret.trim();
+      }
+
       const updated = await api.updateSettings(payload);
       setTokenMasked(updated.authentik_token_masked);
       setTokenConfigured(updated.authentik_token_configured);
       setTelegramTokenMasked(updated.telegram_bot_token_masked || '');
       setTelegramTokenConfigured(updated.telegram_bot_token_configured || false);
       setTelegramToken('');
+
+      setOidcClientSecretMasked(updated.oidc_client_secret_masked || '');
+      setOidcClientSecretConfigured(updated.oidc_client_secret_configured);
+      setOidcClientSecret('');
+      setAdminPassword('');
+      setAdminPasswordConfigured(updated.admin_password_configured);
+      setOidcConfigured(updated.oidc_configured);
 
       setAuthentikToken(''); // Clear input after saving
       onShowToast('Settings updated successfully and saved to encrypted database!', 'success');
@@ -256,6 +311,230 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
       {/* Grid of Setting Sections */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        {/* Security & Authentication (OIDC / OAuth2) - Full Width Card */}
+        <div className="lg:col-span-2 bg-[#111827] border border-[#25354b] rounded-2xl p-6 shadow-xl space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-[#25354b] gap-3">
+            <div className="flex items-center space-x-2.5">
+              <div className="h-8 w-8 rounded-lg bg-orange-500/15 text-[#fd7e14] border border-orange-500/30 flex items-center justify-center">
+                <ShieldCheck className="h-4 w-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  Security & Single Sign-On (OIDC / OAuth2)
+                  <span className={`text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full border ${
+                    authMethod === 'oidc' 
+                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' 
+                      : authMethod === 'password'
+                      ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                      : authMethod === 'forward_auth'
+                      ? 'bg-sky-500/15 text-sky-400 border-sky-500/30'
+                      : 'bg-slate-500/15 text-slate-400 border-slate-500/30'
+                  }`}>
+                    {authMethod === 'oidc' ? 'OIDC SSO Active' : authMethod === 'password' ? 'Password Auth' : authMethod === 'forward_auth' ? 'Forward Auth' : 'No Auth (Open)'}
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Protect Authentik Access Manager using your Authentik accounts or automated OAuth2/OIDC provider.
+                </p>
+              </div>
+            </div>
+
+            {/* 1-Click Setup Launch Button */}
+            <button
+              type="button"
+              onClick={() => setIsOidcModalOpen(true)}
+              className="flex items-center space-x-1.5 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-md transition-all cursor-pointer shrink-0"
+            >
+              <Sparkles className="h-4 w-4" />
+              <span>{oidcConfigured ? 'Re-run OIDC Setup Wizard' : '🚀 1-Click OIDC Setup Wizard'}</span>
+            </button>
+          </div>
+
+          {/* Authentication Method Selector */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold text-slate-200">Active Authentication Method</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              {[
+                { id: 'none', label: 'None (Open)', desc: 'Local admin bypass, ideal for isolated LANs' },
+                { id: 'password', label: 'Password', desc: 'Single master admin password' },
+                { id: 'oidc', label: 'Authentik OIDC', desc: 'Secure SSO restricted to Authentik admin group' },
+                { id: 'forward_auth', label: 'Forward Auth', desc: 'Reverse proxy / Authentik Outpost headers' },
+              ].map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setAuthMethod(m.id as any)}
+                  className={`text-left p-3 rounded-xl border transition-all ${
+                    authMethod === m.id
+                      ? 'bg-orange-500/10 border-orange-500/50 text-white shadow-sm'
+                      : 'bg-[#0b0f17] border-[#25354b] text-slate-400 hover:border-slate-600'
+                  }`}
+                >
+                  <div className={`text-xs font-bold ${authMethod === m.id ? 'text-[#fd7e14]' : 'text-slate-300'}`}>
+                    {m.label}
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5 line-clamp-2">{m.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* If Password Auth selected: Password input */}
+          {authMethod === 'password' && (
+            <div className="p-4 rounded-xl bg-[#0b0f17] border border-[#25354b] space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-slate-300">Master Admin Password</label>
+                {adminPasswordConfigured && (
+                  <span className="text-[10px] text-emerald-400 font-mono">Password configured</span>
+                )}
+              </div>
+              <div className="relative">
+                <input
+                  type={showAdminPassword ? 'text' : 'password'}
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  placeholder={adminPasswordConfigured ? 'Enter new password to change...' : 'Set administrator password...'}
+                  className="w-full bg-[#111827] border border-[#25354b] rounded-xl pl-3.5 pr-10 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14]"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAdminPassword(!showAdminPassword)}
+                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200"
+                >
+                  {showAdminPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* OIDC Configured Status Banner & Parameter Inputs */}
+          <div className="space-y-4 pt-1">
+            {oidcConfigured ? (
+              <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                  <span className="text-xs text-emerald-200 font-medium">
+                    OIDC Provider linked: <code className="text-emerald-300 bg-emerald-950/40 px-1 py-0.5 rounded font-mono">{oidcClientId}</code>
+                  </span>
+                </div>
+                <a
+                  href="/api/auth/oidc/login"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Test OIDC Login Flow
+                </a>
+              </div>
+            ) : (
+              <div className="p-3.5 rounded-xl bg-orange-500/10 border border-orange-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="text-xs text-slate-300">
+                  <span className="font-semibold text-orange-200">Tip:</span> Use the 1-Click OIDC Setup Wizard to automatically provision the application and provider directly into Authentik without manual copy-pasting.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsOidcModalOpen(true)}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-orange-500/20 hover:bg-orange-500/30 text-orange-200 border border-orange-500/30 shrink-0 flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Launch Setup Wizard
+                </button>
+              </div>
+            )}
+
+            {/* Application Base URL with Browser Auto-Detection */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-slate-300">Manager Application URL</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAppUrl(window.location.origin);
+                      onShowToast(`Detected URL: ${window.location.origin}`, 'info');
+                    }}
+                    className="text-[10px] text-orange-400 hover:text-orange-300 flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className="h-2.5 w-2.5" />
+                    Detect Current
+                  </button>
+                </div>
+                <input
+                  type="url"
+                  value={appUrl}
+                  onChange={(e) => setAppUrl(e.target.value)}
+                  placeholder="https://manager.homelab.lan"
+                  className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14] font-mono"
+                />
+                <p className="text-[10px] text-slate-500">The external base URL of this dashboard for redirect callbacks.</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300">Authorized Admin Group (RBAC)</label>
+                <input
+                  type="text"
+                  value={oidcAdminGroup}
+                  onChange={(e) => setOidcAdminGroup(e.target.value)}
+                  placeholder="authentik Admins"
+                  className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14]"
+                />
+                <p className="text-[10px] text-slate-500">Authentik group required to access this management dashboard.</p>
+              </div>
+            </div>
+
+            {/* OIDC Credentials Details */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-slate-300">OIDC Client ID</label>
+                <input
+                  type="text"
+                  value={oidcClientId}
+                  onChange={(e) => setOidcClientId(e.target.value)}
+                  placeholder="authentik-manager-..."
+                  className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-3 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-[#fd7e14]"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-medium text-slate-300">OIDC Client Secret</label>
+                  {oidcClientSecretConfigured && (
+                    <span className="text-[10px] text-slate-400 font-mono">{oidcClientSecretMasked}</span>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type={showOidcSecret ? 'text' : 'password'}
+                    value={oidcClientSecret}
+                    onChange={(e) => setOidcClientSecret(e.target.value)}
+                    placeholder={oidcClientSecretConfigured ? 'Keep current secret...' : 'Paste client secret...'}
+                    className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl pl-3 pr-8 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-[#fd7e14]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowOidcSecret(!showOidcSecret)}
+                    className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-200"
+                  >
+                    {showOidcSecret ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-slate-300">OIDC Issuer URL</label>
+                <input
+                  type="text"
+                  value={oidcIssuerUrl}
+                  onChange={(e) => setOidcIssuerUrl(e.target.value)}
+                  placeholder="https://auth.company/application/o/authentik-manager/"
+                  className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-3 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-[#fd7e14]"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* 1. Authentik Connection Settings */}
         <div className="bg-[#111827] border border-[#25354b] rounded-2xl p-6 shadow-xl space-y-4">
@@ -711,17 +990,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             </div>
           </div>
 
-          {/* Security Notice Note */}
-          <div className="mt-4 p-3 rounded-xl bg-[#16202e] border border-[#25354b] text-[11px] text-slate-400 flex items-start gap-2.5">
-            <HelpCircle className="h-4 w-4 text-sky-400 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-semibold text-slate-200">Where are authentication settings managed?</span>
-              <p className="mt-0.5">
-                Authentication mechanisms (<code className="text-orange-300 font-mono">AUTH_METHOD</code>, <code className="text-orange-300 font-mono">ADMIN_PASSWORD</code>, and OIDC client secrets) remain anchored in your server's <code className="text-orange-300 font-mono">.env</code> file for zero-trust bootstrapping security.
-              </p>
-            </div>
-          </div>
-
         </div>
 
       </div>
@@ -731,12 +999,23 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         <button
           type="submit"
           disabled={saving}
-          className="flex items-center space-x-2 bg-[#fd7e14] hover:bg-[#ea6c0a] disabled:opacity-50 text-white text-xs font-semibold px-6 py-2.5 rounded-xl shadow-md transition-colors"
+          className="flex items-center space-x-2 bg-[#fd7e14] hover:bg-[#ea6c0a] disabled:opacity-50 text-white text-xs font-semibold px-6 py-2.5 rounded-xl shadow-md transition-colors cursor-pointer"
         >
           <Save className="h-4 w-4" />
           <span>{saving ? 'Saving Changes...' : 'Save All Settings'}</span>
         </button>
       </div>
+
+      {/* 1-Click OIDC Auto-Setup Wizard Modal */}
+      <OidcSetupModal
+        isOpen={isOidcModalOpen}
+        onClose={() => setIsOidcModalOpen(false)}
+        onShowToast={onShowToast}
+        onSuccess={() => {
+          loadSettings();
+          if (onSettingsUpdated) onSettingsUpdated();
+        }}
+      />
 
     </form>
   );

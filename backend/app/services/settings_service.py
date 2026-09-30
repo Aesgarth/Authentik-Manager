@@ -1,11 +1,14 @@
 import base64
 import hashlib
 import logging
+import secrets
 import httpx
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+from fastapi import HTTPException
 from cryptography.fernet import Fernet
 from app.config import settings
 from app.database import get_all_app_settings, set_app_setting
+from app.authentik_client import authentik_client
 from app.models import (
     SettingsResponse,
     UpdateSettingsRequest,
@@ -13,6 +16,8 @@ from app.models import (
     TestConnectionResponse,
     TestTelegramRequest,
     TestTelegramResponse,
+    AutoSetupOidcRequest,
+    AutoSetupOidcResponse,
 )
 from app.services.audit_service import audit_service
 
@@ -23,6 +28,7 @@ class SettingsService:
         # Derive a 32-byte Fernet key from SECRET_KEY
         key_digest = hashlib.sha256(settings.SECRET_KEY.encode()).digest()
         self._fernet = Fernet(base64.urlsafe_b64encode(key_digest))
+        self._app_url: Optional[str] = None
         self._custom_invite_message: Optional[str] = None
         self._notification_webhook_url: Optional[str] = None
         self._ntfy_topic: Optional[str] = None
@@ -100,6 +106,22 @@ class SettingsService:
                         self._default_invite_expiry_days = int(val)
                     except ValueError:
                         pass
+                elif key == "auth_method" and val:
+                    settings.AUTH_METHOD = val
+                elif key == "admin_password" and val:
+                    settings.ADMIN_PASSWORD = val
+                elif key == "app_url" and val:
+                    self._app_url = val
+                elif key == "oidc_client_id" and val:
+                    settings.OIDC_CLIENT_ID = val
+                elif key == "oidc_client_secret" and val:
+                    settings.OIDC_CLIENT_SECRET = val
+                elif key == "oidc_issuer_url" and val:
+                    settings.OIDC_ISSUER_URL = val
+                elif key == "oidc_redirect_uri" and val:
+                    settings.OIDC_REDIRECT_URI = val
+                elif key == "oidc_admin_group" and val:
+                    settings.OIDC_ADMIN_GROUP = val
 
             # Sync whatsapp_service instance
             from app.services.whatsapp_service import whatsapp_service
@@ -157,6 +179,17 @@ class SettingsService:
             telegram_admin_chat_ids=self._telegram_admin_chat_ids,
             default_lease_duration_hours=self._default_lease_duration_hours,
             default_invite_expiry_days=self._default_invite_expiry_days,
+            # OIDC & Security
+            auth_method=settings.AUTH_METHOD,
+            admin_password_configured=bool(settings.ADMIN_PASSWORD and settings.ADMIN_PASSWORD != "admin123"),
+            app_url=self._app_url,
+            oidc_client_id=settings.OIDC_CLIENT_ID or "",
+            oidc_client_secret_masked=self._mask_token(settings.OIDC_CLIENT_SECRET) if settings.OIDC_CLIENT_SECRET else "",
+            oidc_client_secret_configured=bool(settings.OIDC_CLIENT_SECRET),
+            oidc_issuer_url=settings.OIDC_ISSUER_URL or "",
+            oidc_redirect_uri=settings.OIDC_REDIRECT_URI or "",
+            oidc_admin_group=settings.OIDC_ADMIN_GROUP or "authentik Admins",
+            oidc_configured=bool(settings.OIDC_CLIENT_ID and settings.OIDC_ISSUER_URL),
         )
 
     async def update_settings(self, req: UpdateSettingsRequest, actor: str = "Admin") -> SettingsResponse:
@@ -266,6 +299,62 @@ class SettingsService:
             self._default_invite_expiry_days = req.default_invite_expiry_days
             updated_keys.append("default_invite_expiry_days")
 
+        if req.auth_method is not None:
+            clean_am = req.auth_method.strip().lower()
+            if clean_am in ("none", "password", "oidc", "forward_auth"):
+                await set_app_setting("auth_method", clean_am)
+                settings.AUTH_METHOD = clean_am
+                updated_keys.append("auth_method")
+
+        if req.admin_password is not None:
+            clean_pw = req.admin_password.strip()
+            if clean_pw:
+                await set_app_setting("admin_password", clean_pw, is_secret=True)
+                settings.ADMIN_PASSWORD = clean_pw
+                updated_keys.append("admin_password")
+
+        if req.app_url is not None:
+            clean_app_url = req.app_url.strip().rstrip("/")
+            await set_app_setting("app_url", clean_app_url)
+            self._app_url = clean_app_url
+            updated_keys.append("app_url")
+
+        if req.oidc_client_id is not None:
+            clean_cid = req.oidc_client_id.strip()
+            await set_app_setting("oidc_client_id", clean_cid)
+            settings.OIDC_CLIENT_ID = clean_cid
+            updated_keys.append("oidc_client_id")
+
+        if req.oidc_client_secret is not None:
+            clean_cs = req.oidc_client_secret.strip()
+            if clean_cs and not clean_cs.startswith("••"):
+                encrypted = self.encrypt_secret(clean_cs)
+                await set_app_setting("oidc_client_secret", encrypted, is_secret=True)
+                settings.OIDC_CLIENT_SECRET = clean_cs
+                updated_keys.append("oidc_client_secret")
+            elif clean_cs == "":
+                await set_app_setting("oidc_client_secret", "", is_secret=True)
+                settings.OIDC_CLIENT_SECRET = None
+                updated_keys.append("oidc_client_secret")
+
+        if req.oidc_issuer_url is not None:
+            clean_iss = req.oidc_issuer_url.strip().rstrip("/")
+            await set_app_setting("oidc_issuer_url", clean_iss)
+            settings.OIDC_ISSUER_URL = clean_iss
+            updated_keys.append("oidc_issuer_url")
+
+        if req.oidc_redirect_uri is not None:
+            clean_red = req.oidc_redirect_uri.strip()
+            await set_app_setting("oidc_redirect_uri", clean_red)
+            settings.OIDC_REDIRECT_URI = clean_red
+            updated_keys.append("oidc_redirect_uri")
+
+        if req.oidc_admin_group is not None:
+            clean_grp = req.oidc_admin_group.strip()
+            await set_app_setting("oidc_admin_group", clean_grp)
+            settings.OIDC_ADMIN_GROUP = clean_grp
+            updated_keys.append("oidc_admin_group")
+
         # Sync services
         from app.services.whatsapp_service import whatsapp_service
         whatsapp_service.enabled = settings.WHATSAPP_ENABLED
@@ -371,5 +460,193 @@ class SettingsService:
                 success=False,
                 error=f"Connection test failed: {str(e)}"
             )
+
+    async def auto_setup_oidc(self, req: AutoSetupOidcRequest, actor: str = "Admin") -> AutoSetupOidcResponse:
+        steps_completed = []
+
+        # 1. Verify Authentik Connection
+        is_connected, conn_err = await authentik_client.test_connection()
+        if not is_connected and not authentik_client.demo_mode:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot connect to Authentik API: {conn_err or 'Invalid token or unreachable host'}. Please configure Authentik URL and API token first."
+            )
+        steps_completed.append("Verified Authentik API connection")
+
+        # 2. Determine App URL and Redirect URI
+        raw_url = (req.app_url or self._app_url or "http://localhost:8000").strip().rstrip("/")
+        if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
+            raw_url = f"https://{raw_url}"
+        app_url = raw_url
+        redirect_uri = f"{app_url}/api/auth/oidc/callback"
+        self._app_url = app_url
+        await set_app_setting("app_url", app_url)
+        steps_completed.append(f"Configured application URL ({app_url}) and redirect URI ({redirect_uri})")
+
+        # 3. Discover Flows
+        flows = await authentik_client.get_flows(designation="authorization")
+        auth_flow = next((f for f in flows if "implicit" in f.get("slug", "").lower()), None)
+        if not auth_flow:
+            auth_flow = next((f for f in flows if "consent" in f.get("slug", "").lower()), None)
+        if not auth_flow and flows:
+            auth_flow = flows[0]
+
+        auth_flow_pk = auth_flow["pk"] if auth_flow else "default-provider-authorization-implicit-consent"
+
+        invalidation_flows = await authentik_client.get_flows(designation="invalidation")
+        invalidation_flow = next((f for f in invalidation_flows if "invalidation" in f.get("slug", "").lower()), None)
+        invalidation_flow_pk = invalidation_flow["pk"] if invalidation_flow else None
+        steps_completed.append(f"Selected authorization flow '{auth_flow.get('name', 'default') if auth_flow else 'default'}'")
+
+        # 4. Discover Scope Mappings
+        scope_mappings = await authentik_client.get_scope_mappings()
+        wanted_scopes = {"openid", "email", "profile"}
+        property_mappings = []
+        for sm in scope_mappings:
+            sm_name = (sm.get("scope_name") or sm.get("name") or "").lower()
+            sm_managed = (sm.get("managed") or "").lower()
+            if any(s in sm_name or s in sm_managed for s in wanted_scopes):
+                property_mappings.append(str(sm["pk"]))
+        steps_completed.append(f"Mapped {len(property_mappings)} standard OIDC scopes (openid, email, profile)")
+
+        # 5. Check or Create OAuth2 Provider
+        provider_name = req.app_name or "Authentik Access Manager"
+        existing_providers = await authentik_client.get_oauth2_providers(search=provider_name)
+        target_provider = next(
+            (p for p in existing_providers if p.get("name", "").strip().lower() == provider_name.strip().lower()),
+            None
+        )
+
+        if target_provider:
+            provider_pk = target_provider["pk"]
+            client_id = target_provider.get("client_id") or f"authentik-manager-{secrets.token_hex(12)}"
+            client_secret = target_provider.get("client_secret") or secrets.token_urlsafe(32)
+            cur_uris = target_provider.get("redirect_uris", [])
+            if redirect_uri not in cur_uris:
+                cur_uris.append(redirect_uri)
+                await authentik_client.update_oauth2_provider(provider_pk, {"redirect_uris": cur_uris})
+            steps_completed.append(f"Updated existing OAuth2 Provider '{provider_name}' (ID: {provider_pk})")
+        else:
+            client_id = f"authentik-manager-{secrets.token_hex(12)}"
+            client_secret = secrets.token_urlsafe(32)
+            created_provider = await authentik_client.create_oauth2_provider(
+                name=provider_name,
+                authorization_flow=str(auth_flow_pk),
+                client_id=client_id,
+                client_secret=client_secret,
+                redirect_uris=[redirect_uri],
+                property_mappings=property_mappings if property_mappings else None,
+                invalidation_flow=str(invalidation_flow_pk) if invalidation_flow_pk else None,
+                issuer_mode="per_provider"
+            )
+            provider_pk = created_provider["pk"]
+            steps_completed.append(f"Created OAuth2 Provider '{provider_name}' in Authentik (Client ID: {client_id})")
+
+        # 6. Check or Create Application in Authentik
+        app_slug = req.app_slug or "authentik-manager"
+        existing_app = await authentik_client.get_application_by_slug(app_slug)
+        if not existing_app:
+            apps = await authentik_client.get_applications()
+            existing_app = next((a for a in apps if a.get("slug") == app_slug), None)
+
+        if existing_app:
+            app_pk = str(existing_app["pk"])
+            await authentik_client.update_application(
+                app_slug,
+                {
+                    "name": provider_name,
+                    "provider": provider_pk,
+                    "meta_launch_url": f"{app_url}/",
+                }
+            )
+            steps_completed.append(f"Attached provider to existing Application '{app_slug}'")
+        else:
+            created_app = await authentik_client.create_application(
+                name=provider_name,
+                slug=app_slug,
+                provider_pk=provider_pk,
+                meta_launch_url=f"{app_url}/",
+                meta_description="Permission Matrix, RBAC Management & Mobile Bot for Authentik",
+                meta_icon="https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/authentik.svg",
+                open_in_new_tab=True
+            )
+            app_pk = str(created_app["pk"])
+            steps_completed.append(f"Created Application '{app_slug}' in Authentik")
+
+        # 7. Restrict Access via Policy Binding to Admin Group
+        admin_group_name = req.admin_group_name or "authentik Admins"
+        groups = await authentik_client.get_groups()
+        admin_group = next(
+            (g for g in groups if g.get("name", "").strip().lower() == admin_group_name.strip().lower()),
+            None
+        )
+
+        bound_group_pk = None
+        if admin_group:
+            bound_group_pk = str(admin_group["pk"])
+            bindings = await authentik_client.get_policy_bindings(target_pk=app_pk)
+            existing_binding = next((b for b in bindings if str(b.get("group")) == bound_group_pk), None)
+            if not existing_binding:
+                await authentik_client.create_policy_binding(
+                    target_pk=app_pk,
+                    group_pk=bound_group_pk,
+                    order=0,
+                    negate=False
+                )
+            await authentik_client.set_app_policy_engine_mode(app_slug, "any")
+            steps_completed.append(f"Enforced access restriction: bound group '{admin_group_name}' to Application")
+        else:
+            steps_completed.append(f"Note: Admin group '{admin_group_name}' was not found in Authentik groups")
+
+        # 8. Save OIDC Settings in database
+        issuer_url = f"{settings.AUTHENTIK_URL.rstrip('/')}/application/o/{app_slug}/"
+        encrypted_secret = self.encrypt_secret(client_secret)
+
+        await set_app_setting("oidc_client_id", client_id)
+        await set_app_setting("oidc_client_secret", encrypted_secret, is_secret=True)
+        await set_app_setting("oidc_issuer_url", issuer_url)
+        await set_app_setting("oidc_redirect_uri", redirect_uri)
+        await set_app_setting("oidc_admin_group", admin_group_name)
+
+        settings.OIDC_CLIENT_ID = client_id
+        settings.OIDC_CLIENT_SECRET = client_secret
+        settings.OIDC_ISSUER_URL = issuer_url
+        settings.OIDC_REDIRECT_URI = redirect_uri
+        settings.OIDC_ADMIN_GROUP = admin_group_name
+
+        if req.activate_immediately:
+            await set_app_setting("auth_method", "oidc")
+            settings.AUTH_METHOD = "oidc"
+            steps_completed.append("Activated Authentik OIDC Single Sign-On as active authentication method")
+        else:
+            steps_completed.append("Saved OIDC configuration (Authentication method unchanged)")
+
+        # 9. Audit Log
+        await audit_service.log(
+            actor=actor,
+            action="OIDC_AUTO_SETUP",
+            target_type="AUTH",
+            target_name=app_slug,
+            details=f"Automated OIDC setup: Provider {provider_name} (ID: {provider_pk}), App {app_slug}, Group '{admin_group_name}'. Active method: {settings.AUTH_METHOD}",
+            status="SUCCESS"
+        )
+
+        return AutoSetupOidcResponse(
+            success=True,
+            message="Authentik OIDC / Single Sign-On setup completed successfully!",
+            app_url=app_url,
+            provider_pk=provider_pk,
+            provider_name=provider_name,
+            client_id=client_id,
+            client_secret_masked=self._mask_token(client_secret),
+            issuer_url=issuer_url,
+            redirect_uri=redirect_uri,
+            application_pk=app_pk,
+            application_slug=app_slug,
+            bound_group_name=admin_group_name,
+            bound_group_pk=bound_group_pk,
+            auth_method=settings.AUTH_METHOD,
+            steps_completed=steps_completed
+        )
 
 settings_service = SettingsService()

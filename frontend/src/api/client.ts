@@ -11,7 +11,9 @@ import {
   UpdateSettingsPayload,
   TestConnectionResult,
   TestNotificationResult,
-  TestTelegramResult
+  TestTelegramResult,
+  AutoSetupOidcPayload,
+  AutoSetupOidcResult
 } from '../types';
 
 const API_BASE = '/api';
@@ -322,6 +324,25 @@ export const api = {
       body: JSON.stringify({ token }),
     });
     if (!res.ok) throw new Error('Failed to test Telegram bot connection');
+    return res.json();
+  },
+
+  async autoSetupOidc(payload: AutoSetupOidcPayload): Promise<AutoSetupOidcResult> {
+    const res = await fetch(`${API_BASE}/settings/auto-setup-oidc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to configure OIDC in Authentik' }));
+      throw new Error(err.detail || 'Failed to configure OIDC in Authentik');
+    }
+    return res.json();
+  },
+
+  async detectUrl(): Promise<{ detected_url: string; saved_url: string; redirect_uri: string }> {
+    const res = await fetch(`${API_BASE}/settings/detect-url`);
+    if (!res.ok) throw new Error('Failed to detect URL');
     return res.json();
   },
 

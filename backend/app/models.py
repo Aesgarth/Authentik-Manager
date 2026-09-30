@@ -255,6 +255,17 @@ class SettingsResponse(BaseModel):
     telegram_admin_chat_ids: Optional[str] = None
     default_lease_duration_hours: int = 72
     default_invite_expiry_days: int = 7
+    # OIDC & Security Settings
+    auth_method: str = "none"
+    admin_password_configured: bool = False
+    app_url: Optional[str] = None
+    oidc_client_id: Optional[str] = None
+    oidc_client_secret_masked: str = ""
+    oidc_client_secret_configured: bool = False
+    oidc_issuer_url: Optional[str] = None
+    oidc_redirect_uri: Optional[str] = None
+    oidc_admin_group: Optional[str] = "authentik Admins"
+    oidc_configured: bool = False
 
 class UpdateSettingsRequest(BaseModel):
     authentik_url: Optional[str] = None
@@ -275,6 +286,39 @@ class UpdateSettingsRequest(BaseModel):
     telegram_admin_chat_ids: Optional[str] = None
     default_lease_duration_hours: Optional[int] = None
     default_invite_expiry_days: Optional[int] = None
+    # OIDC & Security Settings
+    auth_method: Optional[str] = None
+    admin_password: Optional[str] = None
+    app_url: Optional[str] = None
+    oidc_client_id: Optional[str] = None
+    oidc_client_secret: Optional[str] = None
+    oidc_issuer_url: Optional[str] = None
+    oidc_redirect_uri: Optional[str] = None
+    oidc_admin_group: Optional[str] = None
+
+class AutoSetupOidcRequest(BaseModel):
+    app_url: Optional[str] = None # e.g. https://manager.lan:8000
+    app_name: Optional[str] = "Authentik Access Manager"
+    app_slug: Optional[str] = "authentik-manager"
+    admin_group_name: Optional[str] = "authentik Admins"
+    activate_immediately: bool = True
+
+class AutoSetupOidcResponse(BaseModel):
+    success: bool
+    message: str
+    app_url: str
+    provider_pk: Optional[Any] = None
+    provider_name: str
+    client_id: str
+    client_secret_masked: str
+    issuer_url: str
+    redirect_uri: str
+    application_pk: Optional[str] = None
+    application_slug: str
+    bound_group_name: str
+    bound_group_pk: Optional[str] = None
+    auth_method: str
+    steps_completed: List[str] = []
 
 class TestConnectionRequest(BaseModel):
     url: Optional[str] = None

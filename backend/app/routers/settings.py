@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from app.auth import get_current_user
 from app.models import (
     SettingsResponse,
@@ -9,6 +9,8 @@ from app.models import (
     TestNotificationResponse,
     TestTelegramRequest,
     TestTelegramResponse,
+    AutoSetupOidcRequest,
+    AutoSetupOidcResponse,
 )
 from app.services.settings_service import settings_service
 
@@ -50,5 +52,25 @@ async def test_telegram_connection(
     current_user: dict = Depends(get_current_user)
 ):
     return await settings_service.test_telegram(req)
+
+@router.post("/auto-setup-oidc", response_model=AutoSetupOidcResponse)
+async def auto_setup_oidc(
+    req: AutoSetupOidcRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    actor = current_user.get("username", "Admin")
+    return await settings_service.auto_setup_oidc(req, actor=actor)
+
+@router.get("/detect-url")
+async def detect_url(request: Request, current_user: dict = Depends(get_current_user)):
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.headers.get("host", str(request.base_url.netloc)))
+    detected = f"{proto}://{host}".rstrip("/")
+    saved = settings_service._app_url
+    return {
+        "detected_url": detected,
+        "saved_url": saved or detected,
+        "redirect_uri": f"{(saved or detected)}/api/auth/oidc/callback"
+    }
 
 

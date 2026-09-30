@@ -24,7 +24,7 @@ import { FlowGuideModal } from './components/FlowGuideModal';
 import { WhatsAppModal } from './components/WhatsAppModal';
 import { TemplateModal } from './components/TemplateModal';
 import { SettingsPanel } from './components/SettingsPanel';
-import { Lock, AlertCircle, CheckCircle } from 'lucide-react';
+import { Lock, AlertCircle, CheckCircle, ShieldCheck, Sparkles, ExternalLink } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [matrixData, setMatrixData] = useState<AccessMatrixData | null>(null);
@@ -535,9 +535,53 @@ export const App: React.FC = () => {
           </div>
         )}
 
+        {/* Unauthenticated Login Screen if OIDC Single Sign-On is active */}
+        {auth && !auth.authenticated && auth.auth_method === 'oidc' && (
+          <div className="max-w-md mx-auto my-16 bg-[#111827] border border-[#25354b] rounded-2xl p-6 shadow-2xl text-center">
+            <div className="h-12 w-12 rounded-xl bg-orange-500/15 text-[#fd7e14] border border-orange-500/30 mx-auto flex items-center justify-center mb-4">
+              <ShieldCheck className="h-6 w-6" />
+            </div>
+            <h2 className="text-lg font-bold text-white mb-1">Authentik Single Sign-On</h2>
+            <p className="text-xs text-slate-400 mb-6">
+              Access to Authentik Access Manager is protected by your Authentik identity provider. Sign in with your authorized Authentik credentials to continue.
+            </p>
+            <a
+              href="/api/auth/oidc/login"
+              className="w-full inline-flex items-center justify-center gap-2 bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-semibold py-3 px-4 rounded-xl transition-all shadow-lg hover:shadow-orange-500/20"
+            >
+              <ExternalLink className="h-4 w-4" />
+              Sign In with Authentik
+            </a>
+            <div className="mt-6 pt-4 border-t border-[#25354b] text-[11px] text-slate-500">
+              Only members of the configured admin group (e.g. <span className="font-mono text-slate-400">authentik Admins</span>) have access.
+            </div>
+          </div>
+        )}
+
         {/* Normal Authenticated View */}
         {(!auth || auth.authenticated || auth.auth_method === 'none') && (
           <>
+            {/* Security Recommendation Banner if auth_method === 'none' */}
+            {auth && auth.auth_method === 'none' && !health?.demo_mode && activeTab !== 'settings' && (
+              <div className="mb-6 p-4 rounded-2xl bg-orange-500/10 border border-orange-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs shadow-md">
+                <div className="flex items-center gap-3">
+                  <div className="h-8 w-8 rounded-lg bg-orange-500/20 border border-orange-500/30 flex items-center justify-center text-[#fd7e14] shrink-0">
+                    <Sparkles className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <span className="font-bold text-white">Protect this Manager with Authentik SSO:</span>
+                    <span className="text-slate-300 ml-1.5">No login authentication is currently active. You can automatically configure an OAuth2 provider and restrict access to admins in 1 click.</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setActiveTab('settings')}
+                  className="px-3 py-1.5 rounded-lg bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-semibold shrink-0 transition-colors shadow cursor-pointer"
+                >
+                  Setup OIDC SSO
+                </button>
+              </div>
+            )}
+
             {/* Authentik Connection Error Banner */}
             {health && !health.authentik_connected && !health.demo_mode && (
               <div className="mb-6 p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-start gap-3 text-rose-300 shadow-lg">

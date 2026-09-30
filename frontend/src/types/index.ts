@@ -160,6 +160,17 @@ export interface AppSettings {
   telegram_admin_chat_ids?: string | null;
   default_lease_duration_hours: number;
   default_invite_expiry_days: number;
+  // OIDC & Security Settings
+  auth_method: 'none' | 'password' | 'forward_auth' | 'oidc';
+  admin_password_configured: boolean;
+  app_url?: string | null;
+  oidc_client_id?: string | null;
+  oidc_client_secret_masked?: string | null;
+  oidc_client_secret_configured: boolean;
+  oidc_issuer_url?: string | null;
+  oidc_redirect_uri?: string | null;
+  oidc_admin_group?: string | null;
+  oidc_configured: boolean;
 }
 
 export interface UpdateSettingsPayload {
@@ -181,6 +192,41 @@ export interface UpdateSettingsPayload {
   telegram_admin_chat_ids?: string | null;
   default_lease_duration_hours?: number;
   default_invite_expiry_days?: number;
+  // OIDC & Security Settings
+  auth_method?: string;
+  admin_password?: string;
+  app_url?: string;
+  oidc_client_id?: string;
+  oidc_client_secret?: string;
+  oidc_issuer_url?: string;
+  oidc_redirect_uri?: string;
+  oidc_admin_group?: string;
+}
+
+export interface AutoSetupOidcPayload {
+  app_url?: string;
+  app_name?: string;
+  app_slug?: string;
+  admin_group_name?: string;
+  activate_immediately?: boolean;
+}
+
+export interface AutoSetupOidcResult {
+  success: boolean;
+  message: string;
+  app_url: string;
+  provider_pk?: any;
+  provider_name: string;
+  client_id: string;
+  client_secret_masked: string;
+  issuer_url: string;
+  redirect_uri: string;
+  application_pk?: string;
+  application_slug: string;
+  bound_group_name: string;
+  bound_group_pk?: string;
+  auth_method: string;
+  steps_completed: string[];
 }
 
 export interface TestConnectionResult {

@@ -75,6 +75,23 @@ async def logout(response: Response):
 
 # ==================== OIDC Flow Endpoints ====================
 
+def get_oidc_endpoints(issuer_url: str) -> tuple[str, str, str]:
+    """Returns (auth_endpoint, token_endpoint, userinfo_endpoint)"""
+    issuer = issuer_url.rstrip("/")
+    if "/application/o/" in issuer:
+        # Authentik per-provider mode: extract root Authentik URL
+        root_url = issuer.split("/application/o/")[0]
+        return (
+            f"{root_url}/application/o/authorize/",
+            f"{root_url}/application/o/token/",
+            f"{root_url}/application/o/userinfo/"
+        )
+    return (
+        f"{issuer}/protocol/openid-connect/auth",
+        f"{issuer}/protocol/openid-connect/token",
+        f"{issuer}/protocol/openid-connect/userinfo"
+    )
+
 @router.get("/oidc/login")
 async def oidc_login(request: Request):
     """Initiates OAuth2/OIDC authorization code flow with Authentik."""
@@ -90,12 +107,7 @@ async def oidc_login(request: Request):
     state = secrets.token_urlsafe(16)
     redirect_uri = settings.OIDC_REDIRECT_URI or str(request.url_for("oidc_callback"))
 
-    # Issuer URL typically ends with /application/o/<slug>/
-    issuer = settings.OIDC_ISSUER_URL.rstrip("/")
-    auth_endpoint = f"{issuer}/protocol/openid-connect/auth" if not issuer.endswith("/application/o/authorize/") else issuer
-    # In Authentik, /application/o/authorize/ or OpenID Connect auth
-    if "/application/o/" in issuer and not issuer.endswith("/auth"):
-        auth_endpoint = f"{issuer}/authorize/"
+    auth_endpoint, _, _ = get_oidc_endpoints(settings.OIDC_ISSUER_URL)
 
     params = {
         "client_id": settings.OIDC_CLIENT_ID,
@@ -122,9 +134,7 @@ async def oidc_callback(request: Request, response: Response, code: Optional[str
     if not saved_state or saved_state != state:
         raise HTTPException(status_code=400, detail="Invalid OIDC state (CSRF check failed)")
 
-    issuer = settings.OIDC_ISSUER_URL.rstrip("/")
-    token_endpoint = f"{issuer}/token/" if "/application/o/" in issuer else f"{issuer}/protocol/openid-connect/token"
-    userinfo_endpoint = f"{issuer}/userinfo/" if "/application/o/" in issuer else f"{issuer}/protocol/openid-connect/userinfo"
+    _, token_endpoint, userinfo_endpoint = get_oidc_endpoints(settings.OIDC_ISSUER_URL)
 
     redirect_uri = settings.OIDC_REDIRECT_URI or str(request.url_for("oidc_callback"))
 

@@ -6,12 +6,14 @@ from app.config import settings
 
 class AuthentikClient:
     def __init__(self):
-        # In-memory mock store for demo/testing mode
         self.mock_applications = []
         self.mock_groups = []
         self.mock_users = []
         self.mock_policy_bindings = []
         self.mock_invites = []
+        self.mock_oauth2_providers = []
+        self.mock_flows = []
+        self.mock_scope_mappings = []
         if settings.DEMO_MODE:
             self._init_mock_store()
 
@@ -261,8 +263,147 @@ class AuthentikClient:
         if self.demo_mode:
             self.mock_invites = [i for i in self.mock_invites if i["pk"] != invite_pk]
             return True
-        await self._request("DELETE", f"/api/v3/stages/invitation/invitations/{invite_pk}/")
+        return await self._request("DELETE", f"/api/v3/stages/invitation/invitations/{invite_pk}/")
         return True
+
+    # ==================== OIDC & Application Provisioning ====================
+
+    async def get_flows(self, designation: Optional[str] = None) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            if designation:
+                return [f for f in self.mock_flows if f.get("designation") == designation]
+            return self.mock_flows
+        params = {"designation": designation} if designation else None
+        return await self._get_all_paginated("/api/v3/flows/instances/", params=params)
+
+    async def get_scope_mappings(self) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            return self.mock_scope_mappings
+        return await self._get_all_paginated("/api/v3/propertymappings/provider/scope/")
+
+    async def get_oauth2_providers(self, search: Optional[str] = None) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            if search:
+                return [p for p in self.mock_oauth2_providers if search.lower() in p.get("name", "").lower()]
+            return self.mock_oauth2_providers
+        params = {"search": search} if search else None
+        return await self._get_all_paginated("/api/v3/providers/oauth2/", params=params)
+
+    async def create_oauth2_provider(
+        self,
+        name: str,
+        authorization_flow: str,
+        client_id: str,
+        client_secret: str,
+        redirect_uris: List[str],
+        property_mappings: Optional[List[str]] = None,
+        invalidation_flow: Optional[str] = None,
+        client_type: str = "confidential",
+        sub_mode: str = "hashed_user_id",
+        include_claims_in_id_token: bool = True,
+        issuer_mode: str = "per_provider"
+    ) -> Dict[str, Any]:
+        if self.demo_mode:
+            new_provider = {
+                "pk": len(self.mock_oauth2_providers) + 1,
+                "name": name,
+                "authorization_flow": authorization_flow,
+                "invalidation_flow": invalidation_flow,
+                "client_type": client_type,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uris": redirect_uris,
+                "property_mappings": property_mappings or [],
+                "sub_mode": sub_mode,
+                "include_claims_in_id_token": include_claims_in_id_token,
+                "issuer_mode": issuer_mode
+            }
+            self.mock_oauth2_providers.append(new_provider)
+            return new_provider
+
+        payload: Dict[str, Any] = {
+            "name": name,
+            "authorization_flow": authorization_flow,
+            "client_type": client_type,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uris": redirect_uris,
+            "sub_mode": sub_mode,
+            "include_claims_in_id_token": include_claims_in_id_token,
+            "issuer_mode": issuer_mode
+        }
+        if property_mappings:
+            payload["property_mappings"] = property_mappings
+        if invalidation_flow:
+            payload["invalidation_flow"] = invalidation_flow
+
+        return await self._request("POST", "/api/v3/providers/oauth2/", json=payload)
+
+    async def update_oauth2_provider(self, pk: Any, data: Dict[str, Any]) -> Dict[str, Any]:
+        if self.demo_mode:
+            for p in self.mock_oauth2_providers:
+                if str(p.get("pk")) == str(pk):
+                    p.update(data)
+                    return p
+            return {"pk": pk, **data}
+        return await self._request("PATCH", f"/api/v3/providers/oauth2/{pk}/", json=data)
+
+    async def get_application_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
+        if self.demo_mode:
+            return next((a for a in self.mock_applications if a.get("slug") == slug), None)
+        try:
+            return await self._request("GET", f"/api/v3/core/applications/{slug}/")
+        except Exception:
+            return None
+
+    async def create_application(
+        self,
+        name: str,
+        slug: str,
+        provider_pk: Optional[Any] = None,
+        meta_launch_url: Optional[str] = None,
+        meta_description: Optional[str] = None,
+        meta_icon: Optional[str] = None,
+        open_in_new_tab: bool = True
+    ) -> Dict[str, Any]:
+        if self.demo_mode:
+            new_app = {
+                "pk": str(uuid.uuid4()),
+                "name": name,
+                "slug": slug,
+                "provider": provider_pk,
+                "meta_launch_url": meta_launch_url,
+                "meta_description": meta_description,
+                "meta_icon": meta_icon,
+                "open_in_new_tab": open_in_new_tab
+            }
+            self.mock_applications.append(new_app)
+            return new_app
+
+        payload: Dict[str, Any] = {
+            "name": name,
+            "slug": slug,
+            "open_in_new_tab": open_in_new_tab
+        }
+        if provider_pk is not None:
+            payload["provider"] = provider_pk
+        if meta_launch_url:
+            payload["meta_launch_url"] = meta_launch_url
+        if meta_description:
+            payload["meta_description"] = meta_description
+        if meta_icon:
+            payload["meta_icon"] = meta_icon
+
+        return await self._request("POST", "/api/v3/core/applications/", json=payload)
+
+    async def update_application(self, slug_or_pk: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        if self.demo_mode:
+            for a in self.mock_applications:
+                if a.get("slug") == slug_or_pk or str(a.get("pk")) == str(slug_or_pk):
+                    a.update(data)
+                    return a
+            return {"pk": slug_or_pk, **data}
+        return await self._request("PATCH", f"/api/v3/core/applications/{slug_or_pk}/", json=data)
 
     # ==================== Mock Store Initialization ====================
 
@@ -435,5 +576,40 @@ class AuthentikClient:
         ]
 
         self.mock_invites = []
+        self.mock_oauth2_providers = []
+        self.mock_flows = [
+            {
+                "pk": "flow-auth-implicit-pk",
+                "name": "default-provider-authorization-implicit-consent",
+                "slug": "default-provider-authorization-implicit-consent",
+                "designation": "authorization",
+            },
+            {
+                "pk": "flow-invalidation-pk",
+                "name": "default-invalidation-flow",
+                "slug": "default-invalidation-flow",
+                "designation": "invalidation",
+            },
+        ]
+        self.mock_scope_mappings = [
+            {
+                "pk": "scope-openid-pk",
+                "name": "authentik default OAuth Mapping: OpenID 'openid'",
+                "scope_name": "openid",
+                "managed": "goauthentik.io/providers/oauth2/scope-openid",
+            },
+            {
+                "pk": "scope-email-pk",
+                "name": "authentik default OAuth Mapping: OpenID 'email'",
+                "scope_name": "email",
+                "managed": "goauthentik.io/providers/oauth2/scope-email",
+            },
+            {
+                "pk": "scope-profile-pk",
+                "name": "authentik default OAuth Mapping: OpenID 'profile'",
+                "scope_name": "profile",
+                "managed": "goauthentik.io/providers/oauth2/scope-profile",
+            },
+        ]
 
 authentik_client = AuthentikClient()

@@ -430,6 +430,60 @@ async def test_telegram_integration():
         assert "Lisa" in invite_reply
         assert "itoken=" in invite_reply
 
+@pytest.mark.asyncio
+async def test_oidc_auto_setup():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Test URL detection endpoint
+        det_res = await client.get("/api/settings/detect-url")
+        assert det_res.status_code == 200
+        det_data = det_res.json()
+        assert "detected_url" in det_data
+        assert "redirect_uri" in det_data
+
+        # 2. Execute 1-Click OIDC Auto-Setup
+        setup_payload = {
+            "app_url": "https://auth-manager.homelab.lan",
+            "app_name": "Authentik Access Manager",
+            "app_slug": "authentik-manager",
+            "admin_group_name": "authentik Admins",
+            "activate_immediately": True
+        }
+        setup_res = await client.post("/api/settings/auto-setup-oidc", json=setup_payload)
+        assert setup_res.status_code == 200
+        setup_data = setup_res.json()
+        assert setup_data["success"] is True
+        assert setup_data["app_url"] == "https://auth-manager.homelab.lan"
+        assert setup_data["redirect_uri"] == "https://auth-manager.homelab.lan/api/auth/oidc/callback"
+        assert setup_data["application_slug"] == "authentik-manager"
+        assert setup_data["bound_group_name"] == "authentik Admins"
+        assert setup_data["auth_method"] == "oidc"
+        assert len(setup_data["steps_completed"]) >= 5
+
+        # 3. Verify settings were persisted and updated in runtime
+        settings_res = await client.get("/api/settings")
+        assert settings_res.status_code == 200
+        s_data = settings_res.json()
+        assert s_data["auth_method"] == "oidc"
+        assert s_data["app_url"] == "https://auth-manager.homelab.lan"
+        assert s_data["oidc_configured"] is True
+        assert s_data["oidc_client_id"].startswith("authentik-manager-")
+        assert s_data["oidc_redirect_uri"] == "https://auth-manager.homelab.lan/api/auth/oidc/callback"
+
+        # 4. Verify auth status
+        auth_res = await client.get("/api/auth/status")
+        assert auth_res.status_code == 200
+        auth_data = auth_res.json()
+        assert auth_data["auth_method"] == "oidc"
+
+        # 5. Verify OIDC login initiates redirect
+        login_res = await client.get("/api/auth/oidc/login", follow_redirects=False)
+        assert login_res.status_code in (302, 307)
+        assert "application/o/authorize" in login_res.headers["location"]
+        assert "client_id=" in login_res.headers["location"]
+        assert "redirect_uri=" in login_res.headers["location"]
+
+
 
 
 

@@ -51,18 +51,28 @@ class BotService:
 
         return False
 
-    def handle_help(self) -> str:
+    def is_admin_telegram_chat(self, chat_id: str) -> bool:
+        allowed_raw = settings_service._telegram_admin_chat_ids
+        if not allowed_raw or not allowed_raw.strip():
+            return False
+        if allowed_raw.strip() == "*":
+            return True
+        allowed_list = [c.strip() for c in allowed_raw.split(",") if c.strip()]
+        return str(chat_id).strip() in allowed_list
+
+    def handle_help(self, channel: str = "whatsapp") -> str:
+        prefix = "/" if channel == "telegram" else "!"
         return (
             "🤖 *Authentik Manager Bot*\n\n"
             "Available Commands:\n"
-            "• `!status` - System health, users, apps & active passes\n"
-            "• `!presets` - View access templates & application bundles\n"
-            "• `!invite <Name> <Preset or Apps> [days]` - Generate an invitation link\n"
-            "• `!help` - Display this command menu\n\n"
+            f"• `{prefix}status` - System health, users, apps & active passes\n"
+            f"• `{prefix}presets` - View access templates & application bundles\n"
+            f"• `{prefix}invite <Name> <Preset or Apps> [days]` - Generate an invitation link\n"
+            f"• `{prefix}help` - Display this command menu\n\n"
             "_Examples:_\n"
-            "• `!invite Alice \"Guest Access\"`\n"
-            "• `!invite Bob Plex,Jellyfin 3`\n"
-            "• `!invite Charlie 1 7` (by preset #ID)"
+            f"• `{prefix}invite Alice \"Guest Access\"`\n"
+            f"• `{prefix}invite Bob Plex,Jellyfin 3`\n"
+            f"• `{prefix}invite Charlie 1 7` (by preset #ID)"
         )
 
     async def handle_status(self) -> str:
@@ -111,7 +121,7 @@ class BotService:
             logger.error(f"Error executing bot !presets: {e}")
             return f"⚠️ Error listing presets: {str(e)}"
 
-    async def handle_invite(self, sender: str, tokens: List[str]) -> str:
+    async def handle_invite(self, sender: str, tokens: List[str], channel: str = "whatsapp") -> str:
         if len(tokens) < 3:
             return (
                 "⚠️ *Invalid syntax*\n\n"
@@ -205,15 +215,16 @@ class BotService:
                 template_id=matched_template.id if matched_template else None
             )
 
-            invite_res = await invite_service.create_invite(invite_req, actor=f"WhatsApp Bot (+{sender})")
+            actor_label = f"Telegram Bot ({sender})" if channel == "telegram" else f"WhatsApp Bot (+{sender})"
+            invite_res = await invite_service.create_invite(invite_req, actor=actor_label)
 
             await audit_service.log(
-                actor=f"WhatsApp (+{sender})",
+                actor=actor_label,
                 action="BOT_CREATE_INVITE",
                 target_type="INVITATION",
                 target_name=name,
                 target_id=invite_res.invitation_pk,
-                details=f"Generated invite via WhatsApp for {len(app_names)} services",
+                details=f"Generated invite via {channel.capitalize()} for {len(app_names)} services",
                 status="SUCCESS"
             )
 
@@ -233,28 +244,38 @@ class BotService:
             logger.error(f"Error creating invite from bot: {e}")
             return f"❌ Failed to create invitation: {str(e)}"
 
-    async def process_message(self, sender: str, raw_message: str) -> Optional[str]:
+    async def process_message(self, sender: str, raw_message: str, channel: str = "whatsapp") -> Optional[str]:
         """
-        Processes incoming WhatsApp message and returns bot response if it is a command.
+        Processes incoming WhatsApp or Telegram message and returns bot response if it is a command.
         """
         message = raw_message.strip()
         if not (message.startswith("!") or message.startswith("/")):
             return None
 
-        # Check authorization
-        if not self.is_admin_phone(sender):
-            logger.warning(f"Unauthorized bot command attempt from phone: {sender}")
-            configured = settings_service._admin_phone_numbers
-            if not configured or not configured.strip():
+        # Check authorization based on channel
+        if channel == "telegram":
+            tg_chat_id = sender.replace("tg_", "")
+            if not self.is_admin_telegram_chat(tg_chat_id):
                 return (
-                    "⚠️ *Authentik Bot Disabled*\n\n"
-                    "No authorized admin phone numbers have been configured in Authentik Manager.\n"
-                    "Please configure your phone number in Settings > WhatsApp Admin Phones."
+                    "⛔ *Unauthorized*\n\n"
+                    f"Your Telegram Chat ID is: `{tg_chat_id}`\n\n"
+                    "To authorize this chat to manage Authentik, add this ID in the web dashboard:\n"
+                    "👉 *Admin & Settings > Telegram Admin Chat IDs*"
                 )
-            return (
-                f"⛔ *Unauthorized*\n\n"
-                f"Your phone number (+{sender}) is not authorized to issue Authentik Manager commands."
-            )
+        else:
+            if not self.is_admin_phone(sender):
+                logger.warning(f"Unauthorized bot command attempt from phone: {sender}")
+                configured = settings_service._admin_phone_numbers
+                if not configured or not configured.strip():
+                    return (
+                        "⚠️ *Authentik Bot Disabled*\n\n"
+                        "No authorized admin phone numbers have been configured in Authentik Manager.\n"
+                        "Please configure your phone number in Settings > WhatsApp Admin Phones."
+                    )
+                return (
+                    f"⛔ *Unauthorized*\n\n"
+                    f"Your phone number (+{sender}) is not authorized to issue Authentik Manager commands."
+                )
 
         try:
             tokens = shlex.split(message)
@@ -267,14 +288,14 @@ class BotService:
         cmd = tokens[0].lower().lstrip("!").lstrip("/")
 
         if cmd in ("help", "start", "menu"):
-            return self.handle_help()
+            return self.handle_help(channel=channel)
         elif cmd in ("status", "health", "info"):
             return await self.handle_status()
         elif cmd in ("presets", "templates"):
             return await self.handle_presets()
         elif cmd in ("invite", "add", "new"):
-            return await self.handle_invite(sender, tokens)
+            return await self.handle_invite(sender, tokens, channel=channel)
         else:
-            return f"❓ Unknown command `!{cmd}`. Type `!help` for available commands."
+            return f"❓ Unknown command `/{cmd}`. Type `/{'help'}` for available commands."
 
 bot_service = BotService()

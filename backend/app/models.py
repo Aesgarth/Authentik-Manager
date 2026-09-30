@@ -249,6 +249,10 @@ class SettingsResponse(BaseModel):
     ntfy_topic: Optional[str] = None
     ntfy_server_url: str = "https://ntfy.sh"
     admin_phone_numbers: Optional[str] = None
+    telegram_enabled: bool = False
+    telegram_bot_token_masked: str = ""
+    telegram_bot_token_configured: bool = False
+    telegram_admin_chat_ids: Optional[str] = None
     default_lease_duration_hours: int = 72
     default_invite_expiry_days: int = 7
 
@@ -266,6 +270,9 @@ class UpdateSettingsRequest(BaseModel):
     ntfy_topic: Optional[str] = None
     ntfy_server_url: Optional[str] = None
     admin_phone_numbers: Optional[str] = None
+    telegram_enabled: Optional[bool] = None
+    telegram_bot_token: Optional[str] = None
+    telegram_admin_chat_ids: Optional[str] = None
     default_lease_duration_hours: Optional[int] = None
     default_invite_expiry_days: Optional[int] = None
 
@@ -277,6 +284,15 @@ class TestConnectionRequest(BaseModel):
 class TestConnectionResponse(BaseModel):
     success: bool
     version: Optional[str] = None
+    error: Optional[str] = None
+
+class TestTelegramRequest(BaseModel):
+    token: Optional[str] = None
+
+class TestTelegramResponse(BaseModel):
+    success: bool
+    bot_username: Optional[str] = None
+    first_name: Optional[str] = None
     error: Optional[str] = None
 
 class TestNotificationRequest(BaseModel):

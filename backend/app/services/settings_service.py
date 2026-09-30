@@ -6,7 +6,14 @@ from typing import Optional, Dict, Any
 from cryptography.fernet import Fernet
 from app.config import settings
 from app.database import get_all_app_settings, set_app_setting
-from app.models import SettingsResponse, UpdateSettingsRequest, TestConnectionRequest, TestConnectionResponse
+from app.models import (
+    SettingsResponse,
+    UpdateSettingsRequest,
+    TestConnectionRequest,
+    TestConnectionResponse,
+    TestTelegramRequest,
+    TestTelegramResponse,
+)
 from app.services.audit_service import audit_service
 
 logger = logging.getLogger("authentik_manager.settings_service")
@@ -21,6 +28,9 @@ class SettingsService:
         self._ntfy_topic: Optional[str] = None
         self._ntfy_server_url: str = "https://ntfy.sh"
         self._admin_phone_numbers: Optional[str] = None
+        self._telegram_enabled: bool = False
+        self._telegram_bot_token: Optional[str] = None
+        self._telegram_admin_chat_ids: Optional[str] = None
         self._default_lease_duration_hours: int = 72
         self._default_invite_expiry_days: int = 7
 
@@ -74,6 +84,12 @@ class SettingsService:
                     self._ntfy_server_url = val
                 elif key == "admin_phone_numbers":
                     self._admin_phone_numbers = val
+                elif key == "telegram_enabled":
+                    self._telegram_enabled = (val.lower() in ("true", "1", "yes"))
+                elif key == "telegram_bot_token" and val:
+                    self._telegram_bot_token = val
+                elif key == "telegram_admin_chat_ids":
+                    self._telegram_admin_chat_ids = val
                 elif key == "default_lease_duration_hours" and val:
                     try:
                         self._default_lease_duration_hours = int(val)
@@ -96,6 +112,14 @@ class SettingsService:
                 ntfy_topic=self._ntfy_topic,
                 ntfy_server_url=self._ntfy_server_url,
                 webhook_url=self._notification_webhook_url
+            )
+
+            # Sync telegram_service instance
+            from app.services.telegram_service import telegram_service
+            telegram_service.configure(
+                enabled=self._telegram_enabled,
+                bot_token=self._telegram_bot_token,
+                admin_chat_ids=self._telegram_admin_chat_ids
             )
 
             logger.info("Successfully loaded system settings from local database.")
@@ -127,6 +151,10 @@ class SettingsService:
             ntfy_topic=self._ntfy_topic,
             ntfy_server_url=self._ntfy_server_url,
             admin_phone_numbers=self._admin_phone_numbers,
+            telegram_enabled=self._telegram_enabled,
+            telegram_bot_token_masked=self._mask_token(self._telegram_bot_token) if self._telegram_bot_token else "",
+            telegram_bot_token_configured=bool(self._telegram_bot_token),
+            telegram_admin_chat_ids=self._telegram_admin_chat_ids,
             default_lease_duration_hours=self._default_lease_duration_hours,
             default_invite_expiry_days=self._default_invite_expiry_days,
         )
@@ -206,6 +234,28 @@ class SettingsService:
             self._admin_phone_numbers = req.admin_phone_numbers.strip()
             updated_keys.append("admin_phone_numbers")
 
+        if req.telegram_enabled is not None:
+            await set_app_setting("telegram_enabled", str(req.telegram_enabled).lower())
+            self._telegram_enabled = req.telegram_enabled
+            updated_keys.append("telegram_enabled")
+
+        if req.telegram_bot_token is not None:
+            clean_tg = req.telegram_bot_token.strip()
+            if clean_tg and not clean_tg.startswith("••"):
+                encrypted = self.encrypt_secret(clean_tg)
+                await set_app_setting("telegram_bot_token", encrypted, is_secret=True)
+                self._telegram_bot_token = clean_tg
+                updated_keys.append("telegram_bot_token")
+            elif clean_tg == "":
+                await set_app_setting("telegram_bot_token", "", is_secret=True)
+                self._telegram_bot_token = None
+                updated_keys.append("telegram_bot_token")
+
+        if req.telegram_admin_chat_ids is not None:
+            await set_app_setting("telegram_admin_chat_ids", req.telegram_admin_chat_ids.strip())
+            self._telegram_admin_chat_ids = req.telegram_admin_chat_ids.strip()
+            updated_keys.append("telegram_admin_chat_ids")
+
         if req.default_lease_duration_hours is not None:
             await set_app_setting("default_lease_duration_hours", str(req.default_lease_duration_hours))
             self._default_lease_duration_hours = req.default_lease_duration_hours
@@ -228,6 +278,13 @@ class SettingsService:
             webhook_url=self._notification_webhook_url
         )
 
+        from app.services.telegram_service import telegram_service
+        telegram_service.configure(
+            enabled=self._telegram_enabled,
+            bot_token=self._telegram_bot_token,
+            admin_chat_ids=self._telegram_admin_chat_ids
+        )
+
         await audit_service.log(
             actor=actor,
             action="UPDATE_SYSTEM_SETTINGS",
@@ -239,6 +296,13 @@ class SettingsService:
         )
 
         return await self.get_settings_response()
+
+    async def test_telegram(self, req: TestTelegramRequest) -> TestTelegramResponse:
+        from app.services.telegram_service import telegram_service
+        token_to_test = req.token
+        if not token_to_test or token_to_test.startswith("••"):
+            token_to_test = self._telegram_bot_token
+        return await telegram_service.test_connection(token_to_test)
 
     async def test_notification(self, channel: str = "all") -> Dict[str, Any]:
         from app.services.notification_service import notification_service

@@ -14,10 +14,11 @@ import {
   HelpCircle,
   Smartphone,
   Radio,
-  Send
+  Send,
+  Bot
 } from 'lucide-react';
 import { api } from '../api/client';
-import { UpdateSettingsPayload, TestNotificationResult } from '../types';
+import { UpdateSettingsPayload, TestNotificationResult, TestTelegramResult } from '../types';
 
 interface SettingsPanelProps {
   onShowToast: (message: string, type?: 'success' | 'error' | 'info') => void;
@@ -35,6 +36,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
   const [testingNotification, setTestingNotification] = useState(false);
   const [testNotifResult, setTestNotifResult] = useState<TestNotificationResult | null>(null);
+
+  const [testingTelegram, setTestingTelegram] = useState(false);
+  const [telegramTestResult, setTelegramTestResult] = useState<TestTelegramResult | null>(null);
 
   // Form Fields
   const [authentikUrl, setAuthentikUrl] = useState('');
@@ -54,6 +58,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [webhookUrl, setWebhookUrl] = useState('');
   const [ntfyTopic, setNtfyTopic] = useState('');
   const [ntfyServerUrl, setNtfyServerUrl] = useState('https://ntfy.sh');
+
+  // Telegram Settings
+  const [telegramEnabled, setTelegramEnabled] = useState(false);
+  const [telegramToken, setTelegramToken] = useState('');
+  const [showTelegramToken, setShowTelegramToken] = useState(false);
+  const [telegramTokenMasked, setTelegramTokenMasked] = useState('');
+  const [telegramTokenConfigured, setTelegramTokenConfigured] = useState(false);
+  const [telegramAdminChatIds, setTelegramAdminChatIds] = useState('');
 
   const [defaultLeaseHours, setDefaultLeaseHours] = useState(72);
   const [defaultInviteDays, setDefaultInviteDays] = useState(7);
@@ -81,6 +93,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       setWebhookUrl(s.notification_webhook_url || '');
       setNtfyTopic(s.ntfy_topic || '');
       setNtfyServerUrl(s.ntfy_server_url || 'https://ntfy.sh');
+
+      setTelegramEnabled(s.telegram_enabled || false);
+      setTelegramTokenMasked(s.telegram_bot_token_masked || '');
+      setTelegramTokenConfigured(s.telegram_bot_token_configured || false);
+      setTelegramAdminChatIds(s.telegram_admin_chat_ids || '');
 
       setDefaultLeaseHours(s.default_lease_duration_hours || 72);
       setDefaultInviteDays(s.default_invite_expiry_days || 7);
@@ -115,6 +132,24 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     }
   };
 
+  const handleTestTelegram = async () => {
+    setTestingTelegram(true);
+    setTelegramTestResult(null);
+    try {
+      const res = await api.testTelegram(telegramToken.trim() || undefined);
+      setTelegramTestResult(res);
+      if (res.success) {
+        onShowToast(`Telegram bot connected: @${res.bot_username || 'Bot'}!`, 'success');
+      } else {
+        onShowToast(`Telegram connection failed: ${res.error || 'Invalid Token'}`, 'error');
+      }
+    } catch (err: any) {
+      onShowToast(err.message || 'Telegram test failed', 'error');
+    } finally {
+      setTestingTelegram(false);
+    }
+  };
+
   const handleTestNotification = async () => {
     setTestingNotification(true);
     setTestNotifResult(null);
@@ -124,7 +159,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       if (res.success) {
         onShowToast('Test push notification dispatched successfully!', 'success');
       } else {
-        const errDetail = res.results?.status || res.results?.ntfy?.error || res.results?.webhook?.error || 'No channels configured';
+        const errDetail = res.results?.status || res.results?.ntfy?.error || res.results?.webhook?.error || res.results?.telegram?.error || 'No channels configured';
         onShowToast(`Push notification warning: ${errDetail}`, 'error');
       }
     } catch (err: any) {
@@ -151,6 +186,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         notification_webhook_url: webhookUrl.trim() || null,
         ntfy_topic: ntfyTopic.trim() || null,
         ntfy_server_url: ntfyServerUrl.trim() || 'https://ntfy.sh',
+        telegram_enabled: telegramEnabled,
+        telegram_admin_chat_ids: telegramAdminChatIds.trim() || null,
         default_lease_duration_hours: Number(defaultLeaseHours),
         default_invite_expiry_days: Number(defaultInviteDays),
       };
@@ -160,9 +197,16 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         payload.authentik_token = authentikToken.trim();
       }
 
+      if (telegramToken.trim()) {
+        payload.telegram_bot_token = telegramToken.trim();
+      }
+
       const updated = await api.updateSettings(payload);
       setTokenMasked(updated.authentik_token_masked);
       setTokenConfigured(updated.authentik_token_configured);
+      setTelegramTokenMasked(updated.telegram_bot_token_masked || '');
+      setTelegramTokenConfigured(updated.telegram_bot_token_configured || false);
+      setTelegramToken('');
 
       setAuthentikToken(''); // Clear input after saving
       onShowToast('Settings updated successfully and saved to encrypted database!', 'success');
@@ -474,6 +518,109 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             </div>
           </div>
 
+          {/* Telegram Bot & Push Bridge */}
+          <div className="pt-2 border-t border-[#25354b] space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Bot className="h-4 w-4 text-[#229ED9]" />
+                <span className="text-xs font-bold text-white">Telegram Bot & Push Alerts</span>
+              </div>
+              <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
+                telegramEnabled && (telegramTokenConfigured || telegramToken.trim()) 
+                  ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' 
+                  : 'text-slate-400 bg-slate-500/10 border-slate-500/20'
+              }`}>
+                {telegramEnabled && (telegramTokenConfigured || telegramToken.trim()) ? 'Configured' : 'Optional'}
+              </span>
+            </div>
+
+            {/* Telegram Enabled Toggle */}
+            <div>
+              <label className="flex items-center space-x-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={telegramEnabled}
+                  onChange={(e) => setTelegramEnabled(e.target.checked)}
+                  className="rounded border-[#25354b] bg-[#0b0f17] text-[#fd7e14] focus:ring-[#fd7e14] h-4 w-4"
+                />
+                <div>
+                  <span className="text-xs font-medium text-slate-200">Enable Telegram Bot & Alerts</span>
+                  <p className="text-[10px] text-slate-500">Manage Authentik via Telegram commands (/status, /presets, /invite) and receive push alerts.</p>
+                </div>
+              </label>
+            </div>
+
+            {/* Bot API Token */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-slate-300">Telegram Bot Token (from @BotFather)</label>
+                {telegramTokenConfigured && (
+                  <span className="text-[10px] text-emerald-400 font-mono">Encrypted in DB</span>
+                )}
+              </div>
+              <div className="flex space-x-2">
+                <div className="relative flex-1">
+                  <input
+                    type={showTelegramToken ? 'text' : 'password'}
+                    value={telegramToken}
+                    onChange={(e) => setTelegramToken(e.target.value)}
+                    placeholder={telegramTokenConfigured ? telegramTokenMasked : '1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ'}
+                    className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl pl-3.5 pr-10 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14] font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowTelegramToken(!showTelegramToken)}
+                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200"
+                  >
+                    {showTelegramToken ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleTestTelegram}
+                  disabled={testingTelegram || (!telegramToken.trim() && !telegramTokenConfigured)}
+                  className="flex items-center space-x-1.5 bg-[#1e2c3f] hover:bg-[#25354b] disabled:opacity-50 text-slate-200 text-xs px-3 py-2 rounded-xl border border-[#2c3f58] transition-colors shrink-0"
+                >
+                  <Bot className={`h-3.5 w-3.5 text-[#229ED9] ${testingTelegram ? 'animate-spin' : ''}`} />
+                  <span>{testingTelegram ? 'Verifying...' : 'Test Bot'}</span>
+                </button>
+              </div>
+              {telegramTestResult && (
+                <div className="text-[11px] pt-1">
+                  {telegramTestResult.success ? (
+                    <span className="text-emerald-400 flex items-center space-x-1 font-medium">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      <span>Verified bot: @{telegramTestResult.bot_username} ({telegramTestResult.first_name})</span>
+                    </span>
+                  ) : (
+                    <span className="text-rose-400 flex items-center space-x-1 font-medium">
+                      <XCircle className="h-3.5 w-3.5" />
+                      <span>{telegramTestResult.error || 'Connection failed'}</span>
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Telegram Admin Chat IDs */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-slate-300">Authorized Telegram Admin Chat IDs</label>
+              <input
+                type="text"
+                value={telegramAdminChatIds}
+                onChange={(e) => setTelegramAdminChatIds(e.target.value)}
+                placeholder="123456789, 987654321, *"
+                className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14] font-mono"
+              />
+              <p className="text-[10px] text-slate-500">
+                Comma-separated Telegram user or group IDs allowed to execute bot commands.
+                <span className="text-sky-400 block mt-0.5">
+                  💡 Tip: Message your bot in Telegram. If unauthorized, it will reply with your exact Chat ID so you can copy and paste it here.
+                </span>
+              </p>
+            </div>
+          </div>
+
           {/* Notification Webhook */}
           <div className="space-y-1.5 pt-2 border-t border-[#25354b]">
             <div className="flex items-center space-x-1.5">
@@ -495,7 +642,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             <button
               type="button"
               onClick={handleTestNotification}
-              disabled={testingNotification || (!ntfyTopic && !webhookUrl)}
+              disabled={testingNotification || (!ntfyTopic && !webhookUrl && (!telegramEnabled || !telegramTokenConfigured))}
               className="flex items-center space-x-1.5 bg-[#1e2c3f] hover:bg-[#25354b] disabled:opacity-50 text-slate-200 text-xs px-3.5 py-2 rounded-xl border border-[#2c3f58] transition-colors"
             >
               <Send className={`h-3.5 w-3.5 text-sky-400 ${testingNotification ? 'animate-spin' : ''}`} />

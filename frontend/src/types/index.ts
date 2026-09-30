@@ -154,6 +154,10 @@ export interface AppSettings {
   ntfy_topic?: string | null;
   ntfy_server_url: string;
   admin_phone_numbers?: string | null;
+  telegram_enabled: boolean;
+  telegram_bot_token_masked?: string | null;
+  telegram_bot_token_configured: boolean;
+  telegram_admin_chat_ids?: string | null;
   default_lease_duration_hours: number;
   default_invite_expiry_days: number;
 }
@@ -172,6 +176,9 @@ export interface UpdateSettingsPayload {
   ntfy_topic?: string | null;
   ntfy_server_url?: string | null;
   admin_phone_numbers?: string | null;
+  telegram_enabled?: boolean;
+  telegram_bot_token?: string | null;
+  telegram_admin_chat_ids?: string | null;
   default_lease_duration_hours?: number;
   default_invite_expiry_days?: number;
 }
@@ -179,6 +186,13 @@ export interface UpdateSettingsPayload {
 export interface TestConnectionResult {
   success: boolean;
   version?: string | null;
+  error?: string | null;
+}
+
+export interface TestTelegramResult {
+  success: boolean;
+  bot_username?: string | null;
+  first_name?: string | null;
   error?: string | null;
 }
 

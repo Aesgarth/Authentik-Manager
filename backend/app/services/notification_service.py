@@ -102,6 +102,20 @@ class NotificationService:
                 logger.warning(f"Failed to dispatch webhook notification: {e}")
                 results["webhook"] = {"success": False, "error": str(e)}
 
+        # 3. Telegram Bot Push Alert
+        try:
+            from app.services.telegram_service import telegram_service
+            if telegram_service.enabled and telegram_service.bot_token and telegram_service.admin_chat_ids:
+                lines = [f"*{title}*", "", message]
+                if action_url:
+                    lines.extend(["", f"[Open Authentik]({action_url})"])
+                tg_text = "\n".join(lines)
+                sent = await telegram_service.broadcast_admin(tg_text)
+                results["telegram"] = {"success": sent > 0, "recipients_reached": sent}
+        except Exception as e:
+            logger.warning(f"Failed to dispatch Telegram notification: {e}")
+            results["telegram"] = {"success": False, "error": str(e)}
+
         return results
 
     async def notify_invite_redeemed(self, user_name: str, user_email: Optional[str], assigned_apps: List[str]):

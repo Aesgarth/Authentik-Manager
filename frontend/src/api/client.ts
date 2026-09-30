@@ -10,7 +10,8 @@ import {
   AppSettings,
   UpdateSettingsPayload,
   TestConnectionResult,
-  TestNotificationResult
+  TestNotificationResult,
+  TestTelegramResult
 } from '../types';
 
 const API_BASE = '/api';
@@ -311,6 +312,16 @@ export const api = {
       body: JSON.stringify({ channel }),
     });
     if (!res.ok) throw new Error('Failed to dispatch test notification');
+    return res.json();
+  },
+
+  async testTelegram(token?: string): Promise<TestTelegramResult> {
+    const res = await fetch(`${API_BASE}/settings/test-telegram`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    if (!res.ok) throw new Error('Failed to test Telegram bot connection');
     return res.json();
   },
 

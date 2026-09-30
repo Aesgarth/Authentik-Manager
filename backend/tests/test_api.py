@@ -368,6 +368,69 @@ async def test_notification_and_bot_api():
         assert "John" in inv_data["reply"]
         assert "itoken=" in inv_data["reply"]
 
+@pytest.mark.asyncio
+async def test_telegram_integration():
+    from app.services.bot_service import bot_service
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Test test-telegram endpoint with empty token
+        tg_test_res = await client.post("/api/settings/test-telegram", json={})
+        assert tg_test_res.status_code == 200
+        assert tg_test_res.json()["success"] is False
+
+        # 2. Update Telegram settings
+        put_res = await client.put(
+            "/api/settings",
+            json={
+                "telegram_enabled": True,
+                "telegram_bot_token": "1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ_1234",
+                "telegram_admin_chat_ids": "99887766, 55443322"
+            }
+        )
+        assert put_res.status_code == 200
+        settings_data = put_res.json()
+        assert settings_data["telegram_enabled"] is True
+        assert settings_data["telegram_bot_token_configured"] is True
+        assert settings_data["telegram_bot_token_masked"].startswith("••••••••")
+        assert "99887766" in settings_data["telegram_admin_chat_ids"]
+
+        # 3. Test unauthorized Telegram chat ID
+        unauth_reply = await bot_service.process_message(
+            sender="112233",
+            raw_message="/status",
+            channel="telegram"
+        )
+        assert "Unauthorized" in unauth_reply
+        assert "112233" in unauth_reply
+
+        # 4. Test authorized Telegram /help
+        help_reply = await bot_service.process_message(
+            sender="99887766",
+            raw_message="/help",
+            channel="telegram"
+        )
+        assert "Available Commands" in help_reply
+        assert "/status" in help_reply
+
+        # 5. Test authorized Telegram /status
+        status_reply = await bot_service.process_message(
+            sender="99887766",
+            raw_message="/status",
+            channel="telegram"
+        )
+        assert "Authentik Manager Status" in status_reply
+
+        # 6. Test authorized Telegram /invite
+        invite_reply = await bot_service.process_message(
+            sender="99887766",
+            raw_message="/invite Lisa Jellyfin 7",
+            channel="telegram"
+        )
+        assert "Invitation Generated" in invite_reply
+        assert "Lisa" in invite_reply
+        assert "itoken=" in invite_reply
+
+
 
 
 

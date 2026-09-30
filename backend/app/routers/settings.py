@@ -7,6 +7,8 @@ from app.models import (
     TestConnectionResponse,
     TestNotificationRequest,
     TestNotificationResponse,
+    TestTelegramRequest,
+    TestTelegramResponse,
 )
 from app.services.settings_service import settings_service
 
@@ -41,4 +43,12 @@ async def test_notification(
     if not results:
         results = {"status": "No push notification channel (NTFY topic or Webhook URL) is configured."}
     return TestNotificationResponse(success=has_success, results=results)
+
+@router.post("/test-telegram", response_model=TestTelegramResponse)
+async def test_telegram_connection(
+    req: TestTelegramRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    return await settings_service.test_telegram(req)
+
 

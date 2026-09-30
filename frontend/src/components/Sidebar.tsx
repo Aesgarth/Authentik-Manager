@@ -12,7 +12,8 @@ import {
   Sparkles,
   Settings,
   Menu,
-  X
+  X,
+  Bot
 } from 'lucide-react';
 import { HealthStatus, AuthStatus, WhatsAppStatus } from '../types';
 
@@ -262,6 +263,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     }`}
                     title={whatsAppStatus?.status || 'Offline'}
                   />
+                </button>
+
+                {/* Telegram Bot */}
+                <button
+                  onClick={() => {
+                    setActiveTab('settings');
+                    closeMobile();
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-[#16202e] transition-colors"
+                >
+                  <div className="flex items-center space-x-3">
+                    <Bot className="h-4 w-4 text-[#229ED9]" />
+                    <span>Telegram Bot</span>
+                  </div>
+                  <span className="text-[10px] text-sky-400 font-mono">Bridge</span>
                 </button>
 
                 {/* Setup Guide */}

@@ -20,6 +20,8 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     await worker.stop()
+    from app.services.telegram_service import telegram_service
+    await telegram_service.stop_polling()
 
 app = FastAPI(
     title=settings.APP_NAME,

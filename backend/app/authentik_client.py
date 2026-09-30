@@ -295,7 +295,7 @@ class AuthentikClient:
         authorization_flow: str,
         client_id: str,
         client_secret: str,
-        redirect_uris: List[str],
+        redirect_uris: Any,
         property_mappings: Optional[List[str]] = None,
         invalidation_flow: Optional[str] = None,
         client_type: str = "confidential",
@@ -321,13 +321,26 @@ class AuthentikClient:
             self.mock_oauth2_providers.append(new_provider)
             return new_provider
 
+        # Normalize redirect_uris for Authentik API
+        # Modern Authentik (2024+) expects: [{"matching_mode": "strict", "url": "..."}]
+        raw_uris = redirect_uris if isinstance(redirect_uris, list) else [redirect_uris]
+        formatted_objects = []
+        formatted_strings = []
+        for u in raw_uris:
+            if isinstance(u, dict):
+                formatted_objects.append(u)
+                formatted_strings.append(u.get("url", ""))
+            else:
+                formatted_objects.append({"matching_mode": "strict", "url": str(u)})
+                formatted_strings.append(str(u))
+
         payload: Dict[str, Any] = {
             "name": name,
             "authorization_flow": authorization_flow,
             "client_type": client_type,
             "client_id": client_id,
             "client_secret": client_secret,
-            "redirect_uris": redirect_uris,
+            "redirect_uris": formatted_objects,
             "sub_mode": sub_mode,
             "include_claims_in_id_token": include_claims_in_id_token,
             "issuer_mode": issuer_mode
@@ -337,7 +350,14 @@ class AuthentikClient:
         if invalidation_flow:
             payload["invalidation_flow"] = invalidation_flow
 
-        return await self._request("POST", "/api/v3/providers/oauth2/", json=payload)
+        try:
+            return await self._request("POST", "/api/v3/providers/oauth2/", json=payload)
+        except RuntimeError as e:
+            # Fallback to string array if Authentik instance expects list of strings
+            if "redirect_uris" in str(e).lower() and ("dictionary" in str(e).lower() or "string" in str(e).lower()):
+                payload["redirect_uris"] = formatted_strings
+                return await self._request("POST", "/api/v3/providers/oauth2/", json=payload)
+            raise
 
     async def update_oauth2_provider(self, pk: Any, data: Dict[str, Any]) -> Dict[str, Any]:
         if self.demo_mode:
@@ -346,6 +366,29 @@ class AuthentikClient:
                     p.update(data)
                     return p
             return {"pk": pk, **data}
+
+        # Normalize redirect_uris if updated
+        if "redirect_uris" in data:
+            raw_uris = data["redirect_uris"] if isinstance(data["redirect_uris"], list) else [data["redirect_uris"]]
+            formatted_objects = []
+            formatted_strings = []
+            for u in raw_uris:
+                if isinstance(u, dict):
+                    formatted_objects.append(u)
+                    formatted_strings.append(u.get("url", ""))
+                else:
+                    formatted_objects.append({"matching_mode": "strict", "url": str(u)})
+                    formatted_strings.append(str(u))
+
+            data["redirect_uris"] = formatted_objects
+            try:
+                return await self._request("PATCH", f"/api/v3/providers/oauth2/{pk}/", json=data)
+            except RuntimeError as e:
+                if "redirect_uris" in str(e).lower():
+                    data["redirect_uris"] = formatted_strings
+                    return await self._request("PATCH", f"/api/v3/providers/oauth2/{pk}/", json=data)
+                raise
+
         return await self._request("PATCH", f"/api/v3/providers/oauth2/{pk}/", json=data)
 
     async def get_application_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
@@ -386,7 +429,10 @@ class AuthentikClient:
             "open_in_new_tab": open_in_new_tab
         }
         if provider_pk is not None:
-            payload["provider"] = provider_pk
+            try:
+                payload["provider"] = int(provider_pk)
+            except (ValueError, TypeError):
+                payload["provider"] = provider_pk
         if meta_launch_url:
             payload["meta_launch_url"] = meta_launch_url
         if meta_description:
@@ -403,6 +449,11 @@ class AuthentikClient:
                     a.update(data)
                     return a
             return {"pk": slug_or_pk, **data}
+        if "provider" in data and data["provider"] is not None:
+            try:
+                data["provider"] = int(data["provider"])
+            except (ValueError, TypeError):
+                pass
         return await self._request("PATCH", f"/api/v3/core/applications/{slug_or_pk}/", json=data)
 
     # ==================== Mock Store Initialization ====================

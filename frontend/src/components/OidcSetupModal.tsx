@@ -86,7 +86,9 @@ export const OidcSetupModal: React.FC<OidcSetupModalProps> = ({
       onShowToast('Authentik OIDC / SSO configured successfully!', 'success');
       if (onSuccess) onSuccess();
     } catch (err: any) {
-      setError(err.message || 'Failed to automate OIDC setup in Authentik');
+      const errMsg = err.message || 'Failed to automate OIDC setup in Authentik';
+      setError(errMsg);
+      onShowToast(errMsg, 'error');
     } finally {
       setLoading(false);
     }

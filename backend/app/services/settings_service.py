@@ -484,19 +484,38 @@ class SettingsService:
         steps_completed.append(f"Configured application URL ({app_url}) and redirect URI ({redirect_uri})")
 
         # 3. Discover Flows
-        flows = await authentik_client.get_flows(designation="authorization")
-        auth_flow = next((f for f in flows if "implicit" in f.get("slug", "").lower()), None)
+        flows = await authentik_client.get_flows()
+        auth_flow = None
+        # Try designation=authorization flows
+        auth_flows = [f for f in flows if f.get("designation") == "authorization"]
+        auth_flow = next((f for f in auth_flows if "implicit" in f.get("slug", "").lower()), None)
         if not auth_flow:
-            auth_flow = next((f for f in flows if "consent" in f.get("slug", "").lower()), None)
+            auth_flow = next((f for f in auth_flows if "consent" in f.get("slug", "").lower()), None)
+        if not auth_flow and auth_flows:
+            auth_flow = auth_flows[0]
+        
+        # If not found by designation, search across all flows by slug
+        if not auth_flow:
+            auth_flow = next((f for f in flows if "implicit" in f.get("slug", "").lower()), None)
+        if not auth_flow:
+            auth_flow = next((f for f in flows if "authorization" in f.get("slug", "").lower()), None)
         if not auth_flow and flows:
             auth_flow = flows[0]
 
-        auth_flow_pk = auth_flow["pk"] if auth_flow else "default-provider-authorization-implicit-consent"
+        if not auth_flow:
+            raise HTTPException(
+                status_code=400,
+                detail="No authorization flow found in Authentik. Please ensure an authorization flow exists in Authentik (e.g. 'default-provider-authorization-implicit-consent')."
+            )
 
-        invalidation_flows = await authentik_client.get_flows(designation="invalidation")
+        auth_flow_pk = auth_flow["pk"]
+
+        invalidation_flows = [f for f in flows if f.get("designation") == "invalidation"]
         invalidation_flow = next((f for f in invalidation_flows if "invalidation" in f.get("slug", "").lower()), None)
+        if not invalidation_flow:
+            invalidation_flow = next((f for f in flows if "invalidation" in f.get("slug", "").lower() or "logout" in f.get("slug", "").lower()), None)
         invalidation_flow_pk = invalidation_flow["pk"] if invalidation_flow else None
-        steps_completed.append(f"Selected authorization flow '{auth_flow.get('name', 'default') if auth_flow else 'default'}'")
+        steps_completed.append(f"Selected authorization flow '{auth_flow.get('name', 'default')}'")
 
         # 4. Discover Scope Mappings
         scope_mappings = await authentik_client.get_scope_mappings()
@@ -520,11 +539,18 @@ class SettingsService:
         if target_provider:
             provider_pk = target_provider["pk"]
             client_id = target_provider.get("client_id") or f"authentik-manager-{secrets.token_hex(12)}"
-            client_secret = target_provider.get("client_secret") or secrets.token_urlsafe(32)
+            client_secret = settings.OIDC_CLIENT_SECRET or target_provider.get("client_secret") or secrets.token_urlsafe(32)
             cur_uris = target_provider.get("redirect_uris", [])
-            if redirect_uri not in cur_uris:
-                cur_uris.append(redirect_uri)
-                await authentik_client.update_oauth2_provider(provider_pk, {"redirect_uris": cur_uris})
+            has_uri = any(
+                (u.get("url") == redirect_uri if isinstance(u, dict) else str(u) == redirect_uri)
+                for u in cur_uris
+            )
+            update_data: Dict[str, Any] = {"client_secret": client_secret}
+            if not has_uri:
+                cur_uris.append({"matching_mode": "strict", "url": redirect_uri})
+                update_data["redirect_uris"] = cur_uris
+
+            await authentik_client.update_oauth2_provider(provider_pk, update_data)
             steps_completed.append(f"Updated existing OAuth2 Provider '{provider_name}' (ID: {provider_pk})")
         else:
             client_id = f"authentik-manager-{secrets.token_hex(12)}"
@@ -555,7 +581,7 @@ class SettingsService:
                 app_slug,
                 {
                     "name": provider_name,
-                    "provider": provider_pk,
+                    "provider": int(provider_pk),
                     "meta_launch_url": f"{app_url}/",
                 }
             )
@@ -564,7 +590,7 @@ class SettingsService:
             created_app = await authentik_client.create_application(
                 name=provider_name,
                 slug=app_slug,
-                provider_pk=provider_pk,
+                provider_pk=int(provider_pk),
                 meta_launch_url=f"{app_url}/",
                 meta_description="Permission Matrix, RBAC Management & Mobile Bot for Authentik",
                 meta_icon="https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/authentik.svg",
@@ -575,28 +601,31 @@ class SettingsService:
 
         # 7. Restrict Access via Policy Binding to Admin Group
         admin_group_name = req.admin_group_name or "authentik Admins"
-        groups = await authentik_client.get_groups()
-        admin_group = next(
-            (g for g in groups if g.get("name", "").strip().lower() == admin_group_name.strip().lower()),
-            None
-        )
-
         bound_group_pk = None
-        if admin_group:
-            bound_group_pk = str(admin_group["pk"])
-            bindings = await authentik_client.get_policy_bindings(target_pk=app_pk)
-            existing_binding = next((b for b in bindings if str(b.get("group")) == bound_group_pk), None)
-            if not existing_binding:
-                await authentik_client.create_policy_binding(
-                    target_pk=app_pk,
-                    group_pk=bound_group_pk,
-                    order=0,
-                    negate=False
-                )
-            await authentik_client.set_app_policy_engine_mode(app_slug, "any")
-            steps_completed.append(f"Enforced access restriction: bound group '{admin_group_name}' to Application")
-        else:
-            steps_completed.append(f"Note: Admin group '{admin_group_name}' was not found in Authentik groups")
+        try:
+            groups = await authentik_client.get_groups()
+            admin_group = next(
+                (g for g in groups if g.get("name", "").strip().lower() == admin_group_name.strip().lower()),
+                None
+            )
+            if admin_group:
+                bound_group_pk = str(admin_group["pk"])
+                bindings = await authentik_client.get_policy_bindings(target_pk=app_pk)
+                existing_binding = next((b for b in bindings if str(b.get("group")) == bound_group_pk), None)
+                if not existing_binding:
+                    await authentik_client.create_policy_binding(
+                        target_pk=app_pk,
+                        group_pk=bound_group_pk,
+                        order=0,
+                        negate=False
+                    )
+                await authentik_client.set_app_policy_engine_mode(app_slug, "any")
+                steps_completed.append(f"Enforced access restriction: bound group '{admin_group_name}' to Application")
+            else:
+                steps_completed.append(f"Note: Admin group '{admin_group_name}' was not found in Authentik groups")
+        except Exception as e:
+            logger.warning(f"Could not bind admin group to application: {e}")
+            steps_completed.append(f"Note: Admin group access binding skipped: {str(e)}")
 
         # 8. Save OIDC Settings in database
         issuer_url = f"{settings.AUTHENTIK_URL.rstrip('/')}/application/o/{app_slug}/"

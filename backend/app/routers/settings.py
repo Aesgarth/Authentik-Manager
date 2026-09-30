@@ -59,7 +59,12 @@ async def auto_setup_oidc(
     current_user: dict = Depends(get_current_user)
 ):
     actor = current_user.get("username", "Admin")
-    return await settings_service.auto_setup_oidc(req, actor=actor)
+    try:
+        return await settings_service.auto_setup_oidc(req, actor=actor)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/detect-url")
 async def detect_url(request: Request, current_user: dict = Depends(get_current_user)):

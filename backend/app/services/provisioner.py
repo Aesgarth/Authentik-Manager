@@ -106,18 +106,7 @@ class ProvisionerService:
         if app_slug:
             await authentik_client.set_app_policy_engine_mode(app_slug, "any")
 
-        # 4. Add superusers to newly created groups so admin is not locked out
-        users = await authentik_client.get_users()
-        superusers = [u for u in users if u.get("is_superuser")]
-        for su in superusers:
-            for g_pk in [user_group_pk, admin_group_pk]:
-                if g_pk:
-                    try:
-                        await authentik_client.add_user_to_group(g_pk, su["pk"])
-                    except Exception:
-                        pass
-
-        # 5. Audit Log
+        # 4. Audit Log
         details_list = []
         if user_group_pk:
             details_list.append(f"User Group: {user_group_name} ({user_group_pk})")

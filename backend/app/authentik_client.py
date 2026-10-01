@@ -1,4 +1,6 @@
 import uuid
+import re
+import secrets
 import httpx
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
@@ -235,10 +237,20 @@ class AuthentikClient:
         fixed_data: Dict[str, Any],
         single_use: bool = True
     ) -> Dict[str, Any]:
+        # Defensively ensure name is a valid slug for Authentik (letters, numbers, underscores, hyphens; max 50)
+        clean_name = re.sub(r'[^a-zA-Z0-9_-]+', '-', name.strip().lower()).strip('-')
+        if not clean_name:
+            clean_name = "invite"
+
+        if re.match(r'^[a-zA-Z0-9_-]+$', name) and len(name) <= 50:
+            slug = name
+        else:
+            slug = f"{clean_name[:38].strip('-')}-{secrets.token_hex(4)}"
+
         if self.demo_mode:
             new_invite = {
                 "pk": str(uuid.uuid4()),
-                "name": name,
+                "name": slug,
                 "expires": expires,
                 "fixed_data": fixed_data,
                 "single_use": single_use,
@@ -247,7 +259,7 @@ class AuthentikClient:
             return new_invite
 
         payload = {
-            "name": name,
+            "name": slug,
             "expires": expires,
             "fixed_data": fixed_data,
             "single_use": single_use,

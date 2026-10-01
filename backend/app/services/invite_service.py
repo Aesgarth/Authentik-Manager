@@ -1,4 +1,6 @@
 import json
+import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 import aiosqlite
@@ -53,8 +55,13 @@ class InviteService:
             fixed_data["phone"] = req.phone.strip()
 
         # 1. Create invitation in Authentik
+        # Authentik Invitation 'name' is a SlugField (^[a-zA-Z0-9_-]+$, max 50 chars)
+        clean_slug = re.sub(r'[^a-zA-Z0-9_-]+', '-', req.name.strip().lower()).strip('-')
+        clean_slug = clean_slug[:30].strip('-')
+        invite_slug = f"invite-{clean_slug}-{secrets.token_hex(4)}" if clean_slug else f"invite-{secrets.token_hex(4)}"
+
         authentik_invite = await authentik_client.create_invitation(
-            name=f"Invite: {req.name}",
+            name=invite_slug,
             expires=expires_at,
             fixed_data=fixed_data,
             single_use=req.single_use

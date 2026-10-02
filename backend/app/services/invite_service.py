@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -9,19 +10,41 @@ from app.config import settings
 from app.database import get_db_path
 from app.models import CreateInviteRequest, TrackedInviteSchema
 from app.services.audit_service import audit_service
-
 from app.services.whatsapp_service import whatsapp_service
+
+logger = logging.getLogger("authentik_manager.invite_service")
 
 EXPRESSION_POLICY_TEMPLATE = '''# Authentik Enrollment Flow Expression Policy
 # Name: Assign Invitation Pre-configured Groups
 # Bind this policy to your Enrollment Flow BEFORE the User Write Stage
 from authentik.core.models import Group
 
-# Check if prompt_data contains pre-assigned groups from the invitation
-if "prompt_data" in request.context and "groups" in request.context.get("prompt_data", {}):
-    target_groups = request.context["prompt_data"]["groups"]
+# 1. Retrieve the invitation from context
+inv = (
+    context.get("invitation")
+    or getattr(request, "context", {}).get("invitation")
+)
+if not inv and hasattr(request, "context") and "flow_plan" in request.context:
+    inv = getattr(request.context["flow_plan"], "context", {}).get("invitation")
+if not inv and "flow_plan" in context:
+    inv = getattr(context["flow_plan"], "context", {}).get("invitation")
+
+target_groups = []
+if inv:
+    fixed_data = getattr(inv, "fixed_data", None)
+    if fixed_data is None and isinstance(inv, dict):
+        fixed_data = inv.get("fixed_data", {})
+    if isinstance(fixed_data, dict):
+        target_groups = fixed_data.get("groups", [])
+
+# Fallback: check prompt_data or request.context
+if not target_groups:
+    prompt_data = context.get("prompt_data") or getattr(request, "context", {}).get("prompt_data", {})
+    if isinstance(prompt_data, dict):
+        target_groups = prompt_data.get("groups", [])
+
+if target_groups:
     resolved_groups = []
-    
     for g_id in target_groups:
         try:
             # Lookup by UUID or Group Name
@@ -31,9 +54,16 @@ if "prompt_data" in request.context and "groups" in request.context.get("prompt_
             ak_logger.warning(f"Group {g_id} not found during invitation enrollment")
 
     if resolved_groups:
-        if "groups" not in request.context["flow_plan"].context:
-            request.context["flow_plan"].context["groups"] = []
-        request.context["flow_plan"].context["groups"].extend(resolved_groups)
+        # Populate flow_plan context for the User Write Stage
+        flow_plan = context.get("flow_plan") or getattr(request, "context", {}).get("flow_plan")
+        if flow_plan and hasattr(flow_plan, "context"):
+            if "groups" not in flow_plan.context:
+                flow_plan.context["groups"] = []
+            flow_plan.context["groups"].extend(resolved_groups)
+        elif isinstance(flow_plan, dict) and "context" in flow_plan:
+            if "groups" not in flow_plan["context"]:
+                flow_plan["context"]["groups"] = []
+            flow_plan["context"]["groups"].extend(resolved_groups)
 
 return True
 '''
@@ -218,8 +248,9 @@ class InviteService:
 
     async def sync_redemptions(self) -> int:
         """
-        Background sync check: Matches newly created users in Authentik against pending invites.
-        If a new user matches an invite email (or newly joined), assigns the pre-selected groups via API.
+        Background & real-time sync: Matches newly created users in Authentik against pending invites.
+        Checks Authentik events ('invitation_used'), target email, and recent user signups to assign
+        pre-selected groups via Authentik API.
         """
         db_path = get_db_path()
         async with aiosqlite.connect(db_path) as db:
@@ -230,30 +261,69 @@ class InviteService:
         if not pending:
             return 0
 
+        # 1. Fetch current users from Authentik
         users = await authentik_client.get_users()
-        users_by_email = {u.get("email", "").lower(): u for u in users if u.get("email")}
-        users_by_username = {u.get("username", "").lower(): u for u in users}
+        users_by_email = {u.get("email", "").strip().lower(): u for u in users if u.get("email")}
+        users_by_username = {u.get("username", "").strip().lower(): u for u in users if u.get("username")}
+
+        # 2. Fetch invitation_used events from Authentik
+        events = await authentik_client.get_events(action="invitation_used", page_size=100)
+        inv_to_user: Dict[str, Dict[str, Any]] = {}
+        for ev in events:
+            ev_user = ev.get("user")
+            ev_context = ev.get("context", {})
+            if isinstance(ev_context, dict):
+                ev_inv = ev_context.get("invitation", {})
+                if isinstance(ev_inv, dict):
+                    ev_inv_pk = str(ev_inv.get("pk", ""))
+                    ev_inv_name = str(ev_inv.get("name", ""))
+                    if ev_user:
+                        if ev_inv_pk:
+                            inv_to_user[ev_inv_pk] = ev_user
+                        if ev_inv_name:
+                            inv_to_user[ev_inv_name] = ev_user
 
         redeemed_count = 0
 
         for invite in pending:
-            target_email = (invite["email"] or "").lower()
             matched_user = None
+            inv_pk = str(invite["invitation_pk"])
+            inv_name = str(invite["name"])
+            target_email = (invite["email"] or "").strip().lower()
 
-            if target_email and target_email in users_by_email:
+            # Strategy 1: Check Authentik invitation_used event by invitation PK or name
+            if inv_pk in inv_to_user:
+                matched_user = inv_to_user[inv_pk]
+            elif inv_name in inv_to_user:
+                matched_user = inv_to_user[inv_name]
+
+            # Strategy 2: Match by target email if provided
+            if not matched_user and target_email and target_email in users_by_email:
                 matched_user = users_by_email[target_email]
 
+            # Strategy 3: Check newly created users matching invite name/email
+            if not matched_user:
+                for u in users:
+                    u_email = u.get("email", "").strip().lower()
+                    u_name = u.get("name", "").strip().lower()
+                    u_user = u.get("username", "").strip().lower()
+                    if (target_email and u_email == target_email) or (inv_name.lower() in [u_name, u_user]):
+                        matched_user = u
+                        break
+
             if matched_user:
+                user_pk = matched_user.get("pk")
+                if isinstance(user_pk, str) and user_pk.isdigit():
+                    user_pk = int(user_pk)
+                username = matched_user.get("username") or matched_user.get("email") or f"User #{user_pk}"
                 assigned_groups = json.loads(invite["assigned_groups"])
-                user_pk = matched_user["pk"]
-                username = matched_user.get("username")
 
                 # Assign groups via API
                 for g_pk in assigned_groups:
                     try:
                         await authentik_client.add_user_to_group(g_pk, user_pk)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Error adding user {user_pk} to group {g_pk}: {e}")
 
                 # Mark redeemed in DB
                 async with aiosqlite.connect(db_path) as db:
@@ -269,7 +339,7 @@ class InviteService:
                     target_type="USER",
                     target_name=username,
                     target_id=str(user_pk),
-                    details=f"Assigned {len(assigned_groups)} groups from invite #{invite['id']}",
+                    details=f"Assigned {len(assigned_groups)} groups from invite #{invite['id']} ({invite['name']})",
                     status="SUCCESS"
                 )
                 redeemed_count += 1
@@ -287,14 +357,89 @@ class InviteService:
 
         return redeemed_count
 
+    async def install_flow_policy(self) -> Dict[str, Any]:
+        """
+        Automatically provisions the Expression Policy into Authentik and binds it
+        to the enrollment flow so that invited users are assigned to their checked apps
+        instantly during registration.
+        """
+        policy_name = "authentik-manager-assign-invite-groups"
+
+        # 1. Fetch or create Expression Policy in Authentik
+        policies = await authentik_client.get_expression_policies()
+        existing_policy = next((p for p in policies if p.get("name") == policy_name), None)
+
+        if existing_policy:
+            policy_pk = str(existing_policy["pk"])
+            await authentik_client.update_expression_policy(
+                policy_pk=policy_pk,
+                name=policy_name,
+                expression=EXPRESSION_POLICY_TEMPLATE
+            )
+        else:
+            created = await authentik_client.create_expression_policy(
+                name=policy_name,
+                expression=EXPRESSION_POLICY_TEMPLATE
+            )
+            policy_pk = str(created["pk"])
+
+        # 2. Find the Enrollment Flow
+        flows = await authentik_client.get_flows()
+        enrollment_flow = next(
+            (f for f in flows if f.get("slug") == settings.DEFAULT_ENROLLMENT_FLOW),
+            None
+        )
+        if not enrollment_flow:
+            enrollment_flow = next(
+                (f for f in flows if f.get("designation") == "enrollment"),
+                None
+            )
+        if not enrollment_flow:
+            enrollment_flow = next(
+                (f for f in flows if "enrollment" in f.get("slug", "").lower() or "invitation" in f.get("slug", "").lower()),
+                None
+            )
+
+        if not enrollment_flow:
+            return {
+                "status": "warning",
+                "policy_pk": policy_pk,
+                "message": f"Created policy '{policy_name}', but could not find enrollment flow '{settings.DEFAULT_ENROLLMENT_FLOW}'. Please bind it manually in Authentik."
+            }
+
+        flow_pk = str(enrollment_flow["pk"])
+
+        # 3. Check if binding already exists
+        bindings = await authentik_client.get_policy_bindings()
+        already_bound = any(
+            str(b.get("target")) == flow_pk and str(b.get("policy")) == policy_pk
+            for b in bindings
+        )
+
+        if not already_bound:
+            await authentik_client.bind_policy_to_flow(
+                flow_pk=flow_pk,
+                policy_pk=policy_pk,
+                order=0
+            )
+
+        flow_display = enrollment_flow.get("name") or enrollment_flow.get("slug")
+        return {
+            "status": "success",
+            "policy_pk": policy_pk,
+            "flow_pk": flow_pk,
+            "flow_slug": enrollment_flow.get("slug"),
+            "message": f"Successfully installed policy '{policy_name}' and bound to enrollment flow '{flow_display}'."
+        }
+
     @staticmethod
     def get_flow_guide() -> Dict[str, str]:
         return {
-            "title": "Authentik Native Group Assignment (Optional Zero-Delay Policy)",
+            "title": "Authentik Native Group Assignment (Zero-Delay Instant Policy)",
             "description": (
-                "While Authentik Access Manager includes an automatic background sync worker, "
-                "you can also paste this Expression Policy into your Authentik Enrollment Flow. "
-                "This ensures groups are applied instantly by Authentik itself during registration."
+                "Authentik Access Manager automatically syncs pending invitations and assigns groups in the background. "
+                "For instantaneous zero-delay assignment during user registration, you can click 'Auto-Install Policy' "
+                "or paste this Expression Policy into your Authentik Enrollment Flow before the User Write Stage."
             ),
             "snippet": EXPRESSION_POLICY_TEMPLATE
         }

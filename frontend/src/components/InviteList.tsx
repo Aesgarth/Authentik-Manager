@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Mail, Copy, Check, Trash2, RefreshCw, Plus, Clock } from 'lucide-react';
+import { Mail, Copy, Check, Trash2, RefreshCw, Plus, Clock, Zap } from 'lucide-react';
 import { TrackedInvite } from '../types';
 
 interface InviteListProps {
@@ -7,6 +7,7 @@ interface InviteListProps {
   onOpenInviteModal: () => void;
   onRevokeInvite: (invitation_pk: string) => Promise<void>;
   onSyncRedemptions: () => Promise<void>;
+  onOpenGuide?: () => void;
   loading?: boolean;
 }
 
@@ -15,6 +16,7 @@ export const InviteList: React.FC<InviteListProps> = ({
   onOpenInviteModal,
   onRevokeInvite,
   onSyncRedemptions,
+  onOpenGuide,
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -50,6 +52,17 @@ export const InviteList: React.FC<InviteListProps> = ({
         </div>
 
         <div className="flex items-center space-x-2">
+          {onOpenGuide && (
+            <button
+              onClick={onOpenGuide}
+              className="flex items-center space-x-1.5 bg-[#0b0f17] hover:bg-[#1e2c3f] text-[#fd7e14] text-xs px-3 py-1.5 rounded-lg border border-[#fd7e14]/30 transition-colors"
+              title="Configure or auto-install Authentik enrollment policy for instant app assignment"
+            >
+              <Zap className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Flow Policy Setup</span>
+            </button>
+          )}
+
           <button
             onClick={handleSync}
             disabled={syncing}

@@ -200,6 +200,21 @@ export const api = {
     return res.json();
   },
 
+  async installFlowPolicy(): Promise<{ status: string; message: string }> {
+    const res = await fetch(`${API_BASE}/invites/install-policy`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to install policy' }));
+      throw new Error(err.detail || 'Failed to install policy');
+    }
+    return res.json();
+  },
+
+  async syncInvites(): Promise<{ status: string; redeemed_count: number }> {
+    const res = await fetch(`${API_BASE}/invites/sync`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to sync invitations');
+    return res.json();
+  },
+
   async getAuditLogs(limit: number = 100): Promise<AuditLog[]> {
     const res = await fetch(`${API_BASE}/audit?limit=${limit}`);
     if (!res.ok) throw new Error('Failed to fetch audit logs');

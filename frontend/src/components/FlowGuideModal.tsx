@@ -1,18 +1,23 @@
 import React, { useState } from 'react';
-import { X, Copy, Check, Zap } from 'lucide-react';
+import { X, Copy, Check, Zap, CheckCircle2 } from 'lucide-react';
+import { api } from '../api/client';
 
 interface FlowGuideModalProps {
   isOpen: boolean;
   onClose: () => void;
   flowGuide: { title: string; description: string; snippet: string } | null;
+  onShowToast?: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
 export const FlowGuideModal: React.FC<FlowGuideModalProps> = ({
   isOpen,
   onClose,
   flowGuide,
+  onShowToast,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installed, setInstalled] = useState(false);
 
   if (!isOpen || !flowGuide) return null;
 
@@ -20,6 +25,19 @@ export const FlowGuideModal: React.FC<FlowGuideModalProps> = ({
     navigator.clipboard.writeText(flowGuide.snippet);
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
+  };
+
+  const handleAutoInstall = async () => {
+    try {
+      setInstalling(true);
+      const res = await api.installFlowPolicy();
+      setInstalled(true);
+      onShowToast?.(res.message, 'success');
+    } catch (err: any) {
+      onShowToast?.(err.message || 'Failed to install policy', 'error');
+    } finally {
+      setInstalling(false);
+    }
   };
 
   return (
@@ -35,7 +53,7 @@ export const FlowGuideModal: React.FC<FlowGuideModalProps> = ({
             <div>
               <h3 className="text-base font-bold text-white">{flowGuide.title}</h3>
               <p className="text-xs text-slate-400">
-                Optional configuration for zero-latency in-flow user group assignment.
+                Configure Authentik to assign checked apps to invited users immediately during signup.
               </p>
             </div>
           </div>
@@ -50,6 +68,36 @@ export const FlowGuideModal: React.FC<FlowGuideModalProps> = ({
         {/* Content */}
         <div className="p-5 overflow-y-auto flex-1 space-y-4 text-xs text-slate-300 leading-relaxed">
           <p>{flowGuide.description}</p>
+
+          {/* 1-Click Auto Install Banner */}
+          <div className="bg-gradient-to-r from-orange-500/10 via-amber-500/10 to-transparent border border-orange-500/30 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="font-semibold text-white text-xs flex items-center gap-1.5">
+                <Zap className="h-4 w-4 text-[#fd7e14]" />
+                <span>1-Click Automated Setup (Recommended)</span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Directly creates the Expression Policy and binds it to your Authentik enrollment flow via API.
+              </p>
+            </div>
+            <button
+              onClick={handleAutoInstall}
+              disabled={installing || installed}
+              className="px-3.5 py-2 rounded-lg bg-[#fd7e14] hover:bg-[#ea6c0a] disabled:opacity-50 text-white font-semibold text-xs flex items-center justify-center space-x-1.5 transition-all shadow-sm shrink-0"
+            >
+              {installed ? (
+                <>
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" />
+                  <span>Installed &amp; Active</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="h-3.5 w-3.5" />
+                  <span>{installing ? 'Installing...' : 'Auto-Install to Authentik'}</span>
+                </>
+              )}
+            </button>
+          </div>
 
           <div className="bg-[#0b0f17] border border-[#25354b] rounded-xl p-3.5 space-y-2">
             <h4 className="font-semibold text-white text-xs">Step-by-step Setup in Authentik:</h4>

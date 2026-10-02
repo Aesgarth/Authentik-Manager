@@ -483,6 +483,23 @@ async def test_oidc_auto_setup():
         assert "client_id=" in login_res.headers["location"]
         assert "redirect_uri=" in login_res.headers["location"]
 
+@pytest.mark.asyncio
+async def test_install_flow_policy_and_sync():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Test install policy
+        install_res = await client.post("/api/invites/install-policy")
+        assert install_res.status_code == 200
+        data = install_res.json()
+        assert data["status"] in ("success", "warning")
+
+        # Test sync endpoint
+        sync_res = await client.post("/api/invites/sync")
+        assert sync_res.status_code == 200
+        sync_data = sync_res.json()
+        assert sync_data["status"] == "ok"
+        assert "redeemed_count" in sync_data
+
 
 
 

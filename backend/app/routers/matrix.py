@@ -19,6 +19,11 @@ router = APIRouter(prefix="/api/matrix", tags=["Access Matrix"])
 
 @router.get("", response_model=AccessMatrixResponse)
 async def get_access_matrix(current_user: dict = Depends(get_current_user)):
+    try:
+        from app.services.invite_service import invite_service
+        await invite_service.sync_redemptions()
+    except Exception:
+        pass
     return await matrix_service.get_matrix()
 
 @router.post("/toggle")

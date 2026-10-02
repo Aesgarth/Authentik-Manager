@@ -6,7 +6,7 @@ from app.services.lease_service import lease_service
 logger = logging.getLogger("authentik_manager.worker")
 
 class BackgroundWorker:
-    def __init__(self, interval_seconds: int = 45):
+    def __init__(self, interval_seconds: int = 20):
         self.interval = interval_seconds
         self._task = None
         self._running = False

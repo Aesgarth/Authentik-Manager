@@ -640,6 +640,7 @@ export const App: React.FC = () => {
                 onOpenInviteModal={() => setIsInviteModalOpen(true)}
                 onRevokeInvite={handleRevokeInvite}
                 onSyncRedemptions={handleSyncRedemptions}
+                onOpenGuide={() => setIsGuideModalOpen(true)}
                 loading={loading}
               />
             )}
@@ -735,6 +736,7 @@ export const App: React.FC = () => {
         isOpen={isGuideModalOpen}
         onClose={() => setIsGuideModalOpen(false)}
         flowGuide={flowGuide}
+        onShowToast={showToast}
       />
 
       <AuditLogDrawer

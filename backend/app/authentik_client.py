@@ -16,6 +16,8 @@ class AuthentikClient:
         self.mock_oauth2_providers = []
         self.mock_flows = []
         self.mock_scope_mappings = []
+        self.mock_expression_policies = []
+        self.mock_events = []
         if settings.DEMO_MODE:
             self._init_mock_store()
 
@@ -275,8 +277,77 @@ class AuthentikClient:
         if self.demo_mode:
             self.mock_invites = [i for i in self.mock_invites if i["pk"] != invite_pk]
             return True
-        return await self._request("DELETE", f"/api/v3/stages/invitation/invitations/{invite_pk}/")
+        await self._request("DELETE", f"/api/v3/stages/invitation/invitations/{invite_pk}/")
         return True
+
+    async def get_events(self, action: Optional[str] = None, page_size: int = 50) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            if action:
+                return [e for e in self.mock_events if e.get("action") == action]
+            return self.mock_events
+        params: Dict[str, Any] = {"page_size": page_size}
+        if action:
+            params["action"] = action
+        try:
+            res = await self._request("GET", "/api/v3/events/events/", params=params)
+            if isinstance(res, dict) and "results" in res:
+                return res["results"]
+            elif isinstance(res, list):
+                return res
+            return []
+        except Exception:
+            return []
+
+    async def get_expression_policies(self) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            return self.mock_expression_policies
+        return await self._get_all_paginated("/api/v3/policies/expression/")
+
+    async def create_expression_policy(self, name: str, expression: str) -> Dict[str, Any]:
+        if self.demo_mode:
+            new_pol = {"pk": str(uuid.uuid4()), "name": name, "expression": expression}
+            self.mock_expression_policies.append(new_pol)
+            return new_pol
+        payload = {
+            "name": name,
+            "expression": expression,
+            "execution_logging": True,
+        }
+        return await self._request("POST", "/api/v3/policies/expression/", json=payload)
+
+    async def update_expression_policy(self, policy_pk: str, name: str, expression: str) -> Dict[str, Any]:
+        if self.demo_mode:
+            for p in self.mock_expression_policies:
+                if p["pk"] == policy_pk:
+                    p["name"] = name
+                    p["expression"] = expression
+                    return p
+            return {"pk": policy_pk, "name": name, "expression": expression}
+        payload = {
+            "name": name,
+            "expression": expression,
+        }
+        return await self._request("PATCH", f"/api/v3/policies/expression/{policy_pk}/", json=payload)
+
+    async def bind_policy_to_flow(self, flow_pk: str, policy_pk: str, order: int = 0) -> Dict[str, Any]:
+        if self.demo_mode:
+            binding = {
+                "pk": str(uuid.uuid4()),
+                "target": flow_pk,
+                "policy": policy_pk,
+                "order": order,
+                "enabled": True
+            }
+            self.mock_policy_bindings.append(binding)
+            return binding
+        payload = {
+            "target": flow_pk,
+            "policy": policy_pk,
+            "order": order,
+            "enabled": True,
+            "failure_result": False,
+        }
+        return await self._request("POST", "/api/v3/policies/bindings/", json=payload)
 
     # ==================== OIDC & Application Provisioning ====================
 

@@ -45,10 +45,19 @@ class MatrixService:
             bound_groups = app_bound_groups.get(app_pk, [])
             bound_group_set = set(bound_groups)
 
-            expected_user_name = f"{settings.APP_GROUP_PREFIX}{app_name}".strip().lower()
+            expected_user_names = [
+                f"{settings.APP_GROUP_PREFIX}{app_name}".strip().lower(),
+                app_name.strip().lower(),
+                f"{app_name} users".strip().lower(),
+                f"{app_name}-users".strip().lower(),
+                app.get("slug", "").strip().lower(),
+                f"{app.get('slug', '')}-users".strip().lower(),
+            ]
             expected_admin_names = [
                 f"{settings.APP_GROUP_PREFIX}{app_name} admin".strip().lower(),
                 f"{app_name} admin".strip().lower(),
+                f"{app_name}-admin".strip().lower(),
+                f"{app.get('slug', '')}-admin".strip().lower(),
             ]
 
             # Detect granular user group
@@ -56,12 +65,25 @@ class MatrixService:
             granular_user_group_name: Optional[str] = None
             has_granular_user_group = False
 
-            if expected_user_name in groups_by_name:
-                u_candidate = groups_by_name[expected_user_name]
-                granular_user_group_pk = str(u_candidate["pk"])
-                granular_user_group_name = u_candidate["name"]
-                if granular_user_group_pk in bound_group_set:
-                    has_granular_user_group = True
+            for u_name in expected_user_names:
+                if u_name in groups_by_name:
+                    u_candidate = groups_by_name[u_name]
+                    granular_user_group_pk = str(u_candidate["pk"])
+                    granular_user_group_name = u_candidate["name"]
+                    if granular_user_group_pk in bound_group_set:
+                        has_granular_user_group = True
+                    break
+
+            # If not found by name, fallback to first non-admin bound group
+            if not granular_user_group_pk and bound_groups:
+                for bg_pk in bound_groups:
+                    bg_obj = groups_by_pk.get(bg_pk)
+                    bg_name = bg_obj["name"] if bg_obj else bg_pk
+                    if not any(admin_kw in bg_name.lower() for admin_kw in ["admin", "administrator"]):
+                        granular_user_group_pk = bg_pk
+                        granular_user_group_name = bg_name
+                        has_granular_user_group = True
+                        break
 
             # Detect granular admin group
             granular_admin_group_pk: Optional[str] = None

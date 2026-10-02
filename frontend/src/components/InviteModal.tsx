@@ -59,7 +59,8 @@ export const InviteModal: React.FC<InviteModalProps> = ({
   const handleSelectAll = () => {
     const all: Record<string, boolean> = {};
     apps.forEach((a) => {
-      if (a.granular_user_group_pk || a.bound_group_pk) all[a.pk] = true;
+      const hasGroup = a.granular_user_group_pk || a.bound_group_pk || appGroupMap[a.pk] || (a.all_bound_groups && a.all_bound_groups.length > 0);
+      if (hasGroup) all[a.pk] = true;
     });
     setSelectedApps(all);
   };
@@ -112,7 +113,12 @@ export const InviteModal: React.FC<InviteModalProps> = ({
 
     apps.forEach((a) => {
       if (selectedApps[a.pk]) {
-        const userGroupPk = a.granular_user_group_pk || a.bound_group_pk || appGroupMap[a.pk];
+        const userGroupPk = a.granular_user_group_pk
+          || a.bound_group_pk
+          || appGroupMap[a.pk]
+          || a.all_bound_groups?.find((g) => !g.is_admin_group)?.pk
+          || a.all_bound_groups?.[0]?.pk;
+
         if (userGroupPk) {
           targetGroupPks.push(userGroupPk);
           targetAppNames.push(a.name);
@@ -451,6 +457,12 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                   {apps.map((app) => {
                     const isChecked = !!selectedApps[app.pk];
                     const isAdminChecked = !!selectedAdminApps[app.pk];
+                    const hasGroup = !!(
+                      app.granular_user_group_pk ||
+                      app.bound_group_pk ||
+                      appGroupMap[app.pk] ||
+                      (app.all_bound_groups && app.all_bound_groups.length > 0)
+                    );
                     return (
                       <div
                         key={app.pk}
@@ -477,6 +489,11 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                             </div>
                           )}
                           <span className="text-xs font-medium text-slate-200">{app.name}</span>
+                          {!hasGroup && (
+                            <span className="text-[10px] text-amber-500 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">
+                              No access group
+                            </span>
+                          )}
                         </label>
 
                         {/* Admin Role Checkbox if app has admin group */}

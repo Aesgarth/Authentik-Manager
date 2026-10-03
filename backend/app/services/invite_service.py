@@ -75,8 +75,15 @@ class InviteService:
             exp_dt = datetime.now(timezone.utc) + timedelta(days=req.expires_in_days)
             expires_at = exp_dt.isoformat()
 
+        # Resolve group names so fixed_data is compatible with external policies expecting names or UUIDs
+        all_groups = await authentik_client.get_groups()
+        group_pk_to_name = {str(g["pk"]): g["name"] for g in all_groups}
+        target_group_names = [group_pk_to_name[pk] for pk in req.group_pks if pk in group_pk_to_name]
+
         fixed_data = {
             "groups": req.group_pks,
+            "groups_to_add": req.group_pks + target_group_names,
+            "group_names": target_group_names,
             "assigned_apps": req.app_names,
         }
         if req.email:

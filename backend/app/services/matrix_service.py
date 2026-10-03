@@ -23,14 +23,14 @@ class MatrixService:
         bindings_raw = await authentik_client.get_policy_bindings()
 
         # Build group lookup maps
-        groups_by_pk = {str(g["pk"]): g for g in groups_raw}
-        groups_by_name = {g["name"].strip().lower(): g for g in groups_raw}
+        groups_by_pk = {str(g["pk"]): g for g in groups_raw if g.get("pk") is not None}
+        groups_by_name = {str(g.get("name") or "").strip().lower(): g for g in groups_raw if g.get("name")}
 
         # Build app policy binding lookup: target_pk -> list of group_pks
         app_bound_groups: Dict[str, List[str]] = {}
         for b in bindings_raw:
-            target = str(b.get("target", ""))
-            grp = str(b.get("group", ""))
+            target = str(b.get("target") or "")
+            grp = str(b.get("group") or "")
             if target and grp:
                 app_bound_groups.setdefault(target, []).append(grp)
 
@@ -40,8 +40,9 @@ class MatrixService:
         app_admin_group_map: Dict[str, Optional[str]] = {}
 
         for app in apps_raw:
-            app_pk = str(app["pk"])
-            app_name = app.get("name", "Unnamed App")
+            app_pk = str(app.get("pk") or "")
+            app_name = str(app.get("name") or "Unnamed App")
+            app_slug = str(app.get("slug") or "").strip().lower()
             bound_groups = app_bound_groups.get(app_pk, [])
             bound_group_set = set(bound_groups)
 
@@ -50,15 +51,20 @@ class MatrixService:
                 app_name.strip().lower(),
                 f"{app_name} users".strip().lower(),
                 f"{app_name}-users".strip().lower(),
-                app.get("slug", "").strip().lower(),
-                f"{app.get('slug', '')}-users".strip().lower(),
             ]
+            if app_slug:
+                expected_user_names.extend([
+                    app_slug,
+                    f"{app_slug}-users",
+                ])
+
             expected_admin_names = [
                 f"{settings.APP_GROUP_PREFIX}{app_name} admin".strip().lower(),
                 f"{app_name} admin".strip().lower(),
                 f"{app_name}-admin".strip().lower(),
-                f"{app.get('slug', '')}-admin".strip().lower(),
             ]
+            if app_slug:
+                expected_admin_names.append(f"{app_slug}-admin")
 
             # Detect granular user group
             granular_user_group_pk: Optional[str] = None
@@ -68,8 +74,8 @@ class MatrixService:
             for u_name in expected_user_names:
                 if u_name in groups_by_name:
                     u_candidate = groups_by_name[u_name]
-                    granular_user_group_pk = str(u_candidate["pk"])
-                    granular_user_group_name = u_candidate["name"]
+                    granular_user_group_pk = str(u_candidate.get("pk") or "")
+                    granular_user_group_name = str(u_candidate.get("name") or "")
                     if granular_user_group_pk in bound_group_set:
                         has_granular_user_group = True
                     break
@@ -78,7 +84,7 @@ class MatrixService:
             if not granular_user_group_pk and bound_groups:
                 for bg_pk in bound_groups:
                     bg_obj = groups_by_pk.get(bg_pk)
-                    bg_name = bg_obj["name"] if bg_obj else bg_pk
+                    bg_name = str(bg_obj.get("name") if bg_obj else bg_pk or "")
                     if not any(admin_kw in bg_name.lower() for admin_kw in ["admin", "administrator"]):
                         granular_user_group_pk = bg_pk
                         granular_user_group_name = bg_name
@@ -93,8 +99,8 @@ class MatrixService:
             for a_name in expected_admin_names:
                 if a_name in groups_by_name:
                     a_candidate = groups_by_name[a_name]
-                    granular_admin_group_pk = str(a_candidate["pk"])
-                    granular_admin_group_name = a_candidate["name"]
+                    granular_admin_group_pk = str(a_candidate.get("pk") or "")
+                    granular_admin_group_name = str(a_candidate.get("name") or "")
                     if granular_admin_group_pk in bound_group_set:
                         has_granular_admin_group = True
                     break
@@ -103,9 +109,10 @@ class MatrixService:
             all_bound_groups: List[BoundGroupRef] = []
             for g_pk in bound_groups:
                 grp_obj = groups_by_pk.get(g_pk)
-                grp_name = grp_obj["name"] if grp_obj else g_pk
-                is_u = (g_pk == granular_user_group_pk) or (grp_name.strip().lower() == expected_user_name)
-                is_a = (g_pk == granular_admin_group_pk) or (grp_name.strip().lower() in expected_admin_names) or ("admin" in grp_name.strip().lower())
+                grp_name = str(grp_obj.get("name") if grp_obj else g_pk or "")
+                grp_name_clean = grp_name.strip().lower()
+                is_u = (g_pk == granular_user_group_pk) or (grp_name_clean in expected_user_names)
+                is_a = (g_pk == granular_admin_group_pk) or (grp_name_clean in expected_admin_names) or ("admin" in grp_name_clean)
                 all_bound_groups.append(BoundGroupRef(
                     pk=g_pk,
                     name=grp_name,
@@ -119,7 +126,7 @@ class MatrixService:
             primary_group_pk: Optional[str] = granular_user_group_pk if has_granular_user_group else (bound_groups[0] if bound_groups else granular_user_group_pk)
             primary_group_name: Optional[str] = None
             if primary_group_pk and primary_group_pk in groups_by_pk:
-                primary_group_name = groups_by_pk[primary_group_pk]["name"]
+                primary_group_name = str(groups_by_pk[primary_group_pk].get("name") or "")
 
             is_protected = len(bound_groups) > 0
 
@@ -129,7 +136,7 @@ class MatrixService:
             app_schemas.append(ApplicationSchema(
                 pk=app_pk,
                 name=app_name,
-                slug=app.get("slug", ""),
+                slug=str(app.get("slug") or ""),
                 group=app.get("group"),
                 meta_icon=app.get("meta_icon"),
                 meta_description=app.get("meta_description"),
@@ -153,17 +160,17 @@ class MatrixService:
             group_pks = []
             for g in raw_groups:
                 if isinstance(g, dict):
-                    group_pks.append(str(g.get("pk")))
+                    group_pks.append(str(g.get("pk") or ""))
                 else:
-                    group_pks.append(str(g))
+                    group_pks.append(str(g or ""))
 
             user_schemas.append(UserSchema(
                 pk=u["pk"],
-                username=u.get("username", ""),
-                name=u.get("name") or u.get("username", ""),
-                email=u.get("email", ""),
-                is_active=u.get("is_active", True),
-                is_superuser=u.get("is_superuser", False),
+                username=str(u.get("username") or ""),
+                name=str(u.get("name") or u.get("username") or ""),
+                email=str(u.get("email") or ""),
+                is_active=bool(u.get("is_active", True)),
+                is_superuser=bool(u.get("is_superuser", False)),
                 groups=group_pks,
                 avatar=u.get("avatar"),
                 last_login=u.get("last_login"),

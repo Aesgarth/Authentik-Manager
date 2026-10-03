@@ -44,22 +44,22 @@ class ProvisionerService:
         # 1. Provision User Group
         if create_user_group:
             existing_user_group = next(
-                (g for g in groups if g["name"].strip().lower() == user_group_name.strip().lower()),
+                (g for g in groups if str(g.get("name") or "").strip().lower() == user_group_name.strip().lower()),
                 None
             )
             if existing_user_group:
-                user_group_pk = str(existing_user_group["pk"])
+                user_group_pk = str(existing_user_group.get("pk") or "")
             else:
                 new_grp = await authentik_client.create_group(
                     name=user_group_name,
                     attributes={"managed_by": "authentik-access-manager", "app_pk": app_pk, "role": "user"}
                 )
-                user_group_pk = str(new_grp["pk"])
+                user_group_pk = str(new_grp.get("pk") or "")
                 user_group_created = True
 
             # Policy binding for user group
             existing_user_binding = next(
-                (b for b in bindings if str(b.get("group")) == user_group_pk),
+                (b for b in bindings if str(b.get("group") or "") == user_group_pk),
                 None
             )
             if not existing_user_binding:
@@ -74,22 +74,22 @@ class ProvisionerService:
         # 2. Provision Admin Group
         if create_admin_group:
             existing_admin_group = next(
-                (g for g in groups if g["name"].strip().lower() == admin_group_name.strip().lower()),
+                (g for g in groups if str(g.get("name") or "").strip().lower() == admin_group_name.strip().lower()),
                 None
             )
             if existing_admin_group:
-                admin_group_pk = str(existing_admin_group["pk"])
+                admin_group_pk = str(existing_admin_group.get("pk") or "")
             else:
                 new_grp = await authentik_client.create_group(
                     name=admin_group_name,
                     attributes={"managed_by": "authentik-access-manager", "app_pk": app_pk, "role": "admin"}
                 )
-                admin_group_pk = str(new_grp["pk"])
+                admin_group_pk = str(new_grp.get("pk") or "")
                 admin_group_created = True
 
             # Policy binding for admin group
             existing_admin_binding = next(
-                (b for b in bindings if str(b.get("group")) == admin_group_pk),
+                (b for b in bindings if str(b.get("group") or "") == admin_group_pk),
                 None
             )
             if not existing_admin_binding:
@@ -156,11 +156,11 @@ class ProvisionerService:
         groups = await authentik_client.get_groups()
         bindings = await authentik_client.get_policy_bindings()
 
-        groups_by_name = {g["name"].strip().lower(): g for g in groups}
+        groups_by_name = {str(g.get("name") or "").strip().lower(): g for g in groups if g.get("name")}
         bound_groups_by_app: Dict[str, set] = {}
         for b in bindings:
-            target = str(b.get("target", ""))
-            grp = str(b.get("group", ""))
+            target = str(b.get("target") or "")
+            grp = str(b.get("group") or "")
             if target and grp:
                 bound_groups_by_app.setdefault(target, set()).add(grp)
 
@@ -168,8 +168,8 @@ class ProvisionerService:
         details = []
 
         for app in apps:
-            app_pk = str(app["pk"])
-            app_name = app.get("name", "Unknown App")
+            app_pk = str(app.get("pk") or "")
+            app_name = str(app.get("name") or "Unknown App")
             bound_set = bound_groups_by_app.get(app_pk, set())
 
             expected_user_name = f"{settings.APP_GROUP_PREFIX}{app_name}".strip().lower()
@@ -177,13 +177,13 @@ class ProvisionerService:
 
             has_user_group = False
             if expected_user_name in groups_by_name:
-                u_pk = str(groups_by_name[expected_user_name]["pk"])
+                u_pk = str(groups_by_name[expected_user_name].get("pk") or "")
                 if u_pk in bound_set:
                     has_user_group = True
 
             has_admin_group = False
             if expected_admin_name in groups_by_name:
-                a_pk = str(groups_by_name[expected_admin_name]["pk"])
+                a_pk = str(groups_by_name[expected_admin_name].get("pk") or "")
                 if a_pk in bound_set:
                     has_admin_group = True
 

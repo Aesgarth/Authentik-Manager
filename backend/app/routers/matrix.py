@@ -15,6 +15,10 @@ from app.models import (
 from app.services.matrix_service import matrix_service
 from app.services.lease_service import lease_service
 
+import logging
+
+logger = logging.getLogger("authentik_manager.matrix_router")
+
 router = APIRouter(prefix="/api/matrix", tags=["Access Matrix"])
 
 @router.get("", response_model=AccessMatrixResponse)
@@ -22,9 +26,13 @@ async def get_access_matrix(current_user: dict = Depends(get_current_user)):
     try:
         from app.services.invite_service import invite_service
         await invite_service.sync_redemptions()
-    except Exception:
-        pass
-    return await matrix_service.get_matrix()
+    except Exception as e:
+        logger.warning(f"Error syncing invite redemptions in matrix endpoint: {e}")
+    try:
+        return await matrix_service.get_matrix()
+    except Exception as e:
+        logger.error(f"Error generating access matrix: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate access matrix: {str(e)}")
 
 @router.post("/toggle")
 async def toggle_permission(

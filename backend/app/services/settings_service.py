@@ -487,18 +487,18 @@ class SettingsService:
         flows = await authentik_client.get_flows()
         auth_flow = None
         # Try designation=authorization flows
-        auth_flows = [f for f in flows if f.get("designation") == "authorization"]
-        auth_flow = next((f for f in auth_flows if "implicit" in f.get("slug", "").lower()), None)
+        auth_flows = [f for f in flows if str(f.get("designation") or "") == "authorization"]
+        auth_flow = next((f for f in auth_flows if "implicit" in str(f.get("slug") or "").lower()), None)
         if not auth_flow:
-            auth_flow = next((f for f in auth_flows if "consent" in f.get("slug", "").lower()), None)
+            auth_flow = next((f for f in auth_flows if "consent" in str(f.get("slug") or "").lower()), None)
         if not auth_flow and auth_flows:
             auth_flow = auth_flows[0]
         
         # If not found by designation, search across all flows by slug
         if not auth_flow:
-            auth_flow = next((f for f in flows if "implicit" in f.get("slug", "").lower()), None)
+            auth_flow = next((f for f in flows if "implicit" in str(f.get("slug") or "").lower()), None)
         if not auth_flow:
-            auth_flow = next((f for f in flows if "authorization" in f.get("slug", "").lower()), None)
+            auth_flow = next((f for f in flows if "authorization" in str(f.get("slug") or "").lower()), None)
         if not auth_flow and flows:
             auth_flow = flows[0]
 
@@ -510,10 +510,10 @@ class SettingsService:
 
         auth_flow_pk = auth_flow["pk"]
 
-        invalidation_flows = [f for f in flows if f.get("designation") == "invalidation"]
-        invalidation_flow = next((f for f in invalidation_flows if "invalidation" in f.get("slug", "").lower()), None)
+        invalidation_flows = [f for f in flows if str(f.get("designation") or "") == "invalidation"]
+        invalidation_flow = next((f for f in invalidation_flows if "invalidation" in str(f.get("slug") or "").lower()), None)
         if not invalidation_flow:
-            invalidation_flow = next((f for f in flows if "invalidation" in f.get("slug", "").lower() or "logout" in f.get("slug", "").lower()), None)
+            invalidation_flow = next((f for f in flows if "invalidation" in str(f.get("slug") or "").lower() or "logout" in str(f.get("slug") or "").lower()), None)
         invalidation_flow_pk = invalidation_flow["pk"] if invalidation_flow else None
         steps_completed.append(f"Selected authorization flow '{auth_flow.get('name', 'default')}'")
 
@@ -532,7 +532,7 @@ class SettingsService:
         provider_name = req.app_name or "Authentik Access Manager"
         existing_providers = await authentik_client.get_oauth2_providers(search=provider_name)
         target_provider = next(
-            (p for p in existing_providers if p.get("name", "").strip().lower() == provider_name.strip().lower()),
+            (p for p in existing_providers if str(p.get("name") or "").strip().lower() == provider_name.strip().lower()),
             None
         )
 
@@ -605,7 +605,7 @@ class SettingsService:
         try:
             groups = await authentik_client.get_groups()
             admin_group = next(
-                (g for g in groups if g.get("name", "").strip().lower() == admin_group_name.strip().lower()),
+                (g for g in groups if str(g.get("name") or "").strip().lower() == admin_group_name.strip().lower()),
                 None
             )
             if admin_group:

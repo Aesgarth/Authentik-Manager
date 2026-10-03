@@ -259,110 +259,120 @@ class InviteService:
         Checks Authentik events ('invitation_used'), target email, and recent user signups to assign
         pre-selected groups via Authentik API.
         """
-        db_path = get_db_path()
-        async with aiosqlite.connect(db_path) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM tracked_invites WHERE status = 'pending'") as cursor:
-                pending = await cursor.fetchall()
+        try:
+            db_path = get_db_path()
+            async with aiosqlite.connect(db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("SELECT * FROM tracked_invites WHERE status = 'pending'") as cursor:
+                    pending = await cursor.fetchall()
 
-        if not pending:
-            return 0
+            if not pending:
+                return 0
 
-        # 1. Fetch current users from Authentik
-        users = await authentik_client.get_users()
-        users_by_email = {u.get("email", "").strip().lower(): u for u in users if u.get("email")}
-        users_by_username = {u.get("username", "").strip().lower(): u for u in users if u.get("username")}
+            # 1. Fetch current users from Authentik
+            users = await authentik_client.get_users()
+            users_by_email = {
+                str(u.get("email") or "").strip().lower(): u 
+                for u in users if u.get("email")
+            }
+            users_by_username = {
+                str(u.get("username") or "").strip().lower(): u 
+                for u in users if u.get("username")
+            }
 
-        # 2. Fetch invitation_used events from Authentik
-        events = await authentik_client.get_events(action="invitation_used", page_size=100)
-        inv_to_user: Dict[str, Dict[str, Any]] = {}
-        for ev in events:
-            ev_user = ev.get("user")
-            ev_context = ev.get("context", {})
-            if isinstance(ev_context, dict):
-                ev_inv = ev_context.get("invitation", {})
-                if isinstance(ev_inv, dict):
-                    ev_inv_pk = str(ev_inv.get("pk", ""))
-                    ev_inv_name = str(ev_inv.get("name", ""))
-                    if ev_user:
-                        if ev_inv_pk:
-                            inv_to_user[ev_inv_pk] = ev_user
-                        if ev_inv_name:
-                            inv_to_user[ev_inv_name] = ev_user
+            # 2. Fetch invitation_used events from Authentik
+            events = await authentik_client.get_events(action="invitation_used", page_size=100)
+            inv_to_user: Dict[str, Dict[str, Any]] = {}
+            for ev in events:
+                ev_user = ev.get("user")
+                ev_context = ev.get("context", {})
+                if isinstance(ev_context, dict):
+                    ev_inv = ev_context.get("invitation", {})
+                    if isinstance(ev_inv, dict):
+                        ev_inv_pk = str(ev_inv.get("pk") or "")
+                        ev_inv_name = str(ev_inv.get("name") or "")
+                        if ev_user:
+                            if ev_inv_pk:
+                                inv_to_user[ev_inv_pk] = ev_user
+                            if ev_inv_name:
+                                inv_to_user[ev_inv_name] = ev_user
 
-        redeemed_count = 0
+            redeemed_count = 0
 
-        for invite in pending:
-            matched_user = None
-            inv_pk = str(invite["invitation_pk"])
-            inv_name = str(invite["name"])
-            target_email = (invite["email"] or "").strip().lower()
+            for invite in pending:
+                matched_user = None
+                inv_pk = str(invite["invitation_pk"] or "")
+                inv_name = str(invite["name"] or "")
+                target_email = str(invite["email"] or "").strip().lower()
 
-            # Strategy 1: Check Authentik invitation_used event by invitation PK or name
-            if inv_pk in inv_to_user:
-                matched_user = inv_to_user[inv_pk]
-            elif inv_name in inv_to_user:
-                matched_user = inv_to_user[inv_name]
+                # Strategy 1: Check Authentik invitation_used event by invitation PK or name
+                if inv_pk and inv_pk in inv_to_user:
+                    matched_user = inv_to_user[inv_pk]
+                elif inv_name and inv_name in inv_to_user:
+                    matched_user = inv_to_user[inv_name]
 
-            # Strategy 2: Match by target email if provided
-            if not matched_user and target_email and target_email in users_by_email:
-                matched_user = users_by_email[target_email]
+                # Strategy 2: Match by target email if provided
+                if not matched_user and target_email and target_email in users_by_email:
+                    matched_user = users_by_email[target_email]
 
-            # Strategy 3: Check newly created users matching invite name/email
-            if not matched_user:
-                for u in users:
-                    u_email = u.get("email", "").strip().lower()
-                    u_name = u.get("name", "").strip().lower()
-                    u_user = u.get("username", "").strip().lower()
-                    if (target_email and u_email == target_email) or (inv_name.lower() in [u_name, u_user]):
-                        matched_user = u
-                        break
+                # Strategy 3: Check newly created users matching invite name/email
+                if not matched_user:
+                    for u in users:
+                        u_email = str(u.get("email") or "").strip().lower()
+                        u_name = str(u.get("name") or "").strip().lower()
+                        u_user = str(u.get("username") or "").strip().lower()
+                        if (target_email and u_email == target_email) or (inv_name and inv_name.lower() in [u_name, u_user]):
+                            matched_user = u
+                            break
 
-            if matched_user:
-                user_pk = matched_user.get("pk")
-                if isinstance(user_pk, str) and user_pk.isdigit():
-                    user_pk = int(user_pk)
-                username = matched_user.get("username") or matched_user.get("email") or f"User #{user_pk}"
-                assigned_groups = json.loads(invite["assigned_groups"])
+                if matched_user:
+                    user_pk = matched_user.get("pk")
+                    if isinstance(user_pk, str) and user_pk.isdigit():
+                        user_pk = int(user_pk)
+                    username = matched_user.get("username") or matched_user.get("email") or f"User #{user_pk}"
+                    assigned_groups = json.loads(invite["assigned_groups"])
 
-                # Assign groups via API
-                for g_pk in assigned_groups:
+                    # Assign groups via API
+                    for g_pk in assigned_groups:
+                        try:
+                            await authentik_client.add_user_to_group(g_pk, user_pk)
+                        except Exception as e:
+                            logger.warning(f"Error adding user {user_pk} to group {g_pk}: {e}")
+
+                    # Mark redeemed in DB
+                    async with aiosqlite.connect(db_path) as db:
+                        await db.execute(
+                            "UPDATE tracked_invites SET status = 'redeemed', redeemed_by = ? WHERE id = ?",
+                            (f"{username} (#{user_pk})", invite["id"])
+                        )
+                        await db.commit()
+
+                    await audit_service.log(
+                        actor="AUTO_SYNC_WORKER",
+                        action="AUTO_ASSIGN_INVITE_GROUPS",
+                        target_type="USER",
+                        target_name=username,
+                        target_id=str(user_pk),
+                        details=f"Assigned {len(assigned_groups)} groups from invite #{invite['id']} ({invite['name']})",
+                        status="SUCCESS"
+                    )
+                    redeemed_count += 1
+
                     try:
-                        await authentik_client.add_user_to_group(g_pk, user_pk)
+                        assigned_apps_list = json.loads(invite["assigned_apps"])
+                        from app.services.notification_service import notification_service
+                        await notification_service.notify_invite_redeemed(
+                            user_name=matched_user.get("name") or username,
+                            user_email=matched_user.get("email"),
+                            assigned_apps=assigned_apps_list
+                        )
                     except Exception as e:
-                        logger.warning(f"Error adding user {user_pk} to group {g_pk}: {e}")
+                        logger.warning(f"Failed to dispatch redemption notification: {e}")
 
-                # Mark redeemed in DB
-                async with aiosqlite.connect(db_path) as db:
-                    await db.execute(
-                        "UPDATE tracked_invites SET status = 'redeemed', redeemed_by = ? WHERE id = ?",
-                        (f"{username} (#{user_pk})", invite["id"])
-                    )
-                    await db.commit()
-
-                await audit_service.log(
-                    actor="AUTO_SYNC_WORKER",
-                    action="AUTO_ASSIGN_INVITE_GROUPS",
-                    target_type="USER",
-                    target_name=username,
-                    target_id=str(user_pk),
-                    details=f"Assigned {len(assigned_groups)} groups from invite #{invite['id']} ({invite['name']})",
-                    status="SUCCESS"
-                )
-                redeemed_count += 1
-
-                try:
-                    assigned_apps_list = json.loads(invite["assigned_apps"])
-                    from app.services.notification_service import notification_service
-                    await notification_service.notify_invite_redeemed(
-                        user_name=matched_user.get("name") or username,
-                        user_email=matched_user.get("email"),
-                        assigned_apps=assigned_apps_list
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to dispatch redemption notification: {e}")
-
-        return redeemed_count
+            return redeemed_count
+        except Exception as e:
+            logger.warning(f"Error during invite sync_redemptions: {e}", exc_info=True)
+            return 0
 
     async def install_flow_policy(self) -> Dict[str, Any]:
         """
@@ -393,17 +403,17 @@ class InviteService:
         # 2. Find the Enrollment Flow
         flows = await authentik_client.get_flows()
         enrollment_flow = next(
-            (f for f in flows if f.get("slug") == settings.DEFAULT_ENROLLMENT_FLOW),
+            (f for f in flows if str(f.get("slug") or "") == settings.DEFAULT_ENROLLMENT_FLOW),
             None
         )
         if not enrollment_flow:
             enrollment_flow = next(
-                (f for f in flows if f.get("designation") == "enrollment"),
+                (f for f in flows if str(f.get("designation") or "") == "enrollment"),
                 None
             )
         if not enrollment_flow:
             enrollment_flow = next(
-                (f for f in flows if "enrollment" in f.get("slug", "").lower() or "invitation" in f.get("slug", "").lower()),
+                (f for f in flows if "enrollment" in str(f.get("slug") or "").lower() or "invitation" in str(f.get("slug") or "").lower()),
                 None
             )
 

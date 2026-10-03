@@ -65,7 +65,7 @@ class TemplateService:
         # Fetch current matrix to resolve app groups
         matrix = await matrix_service.get_matrix()
         apps_by_pk = {a.pk: a for a in matrix.apps}
-        apps_by_slug = {a.slug.strip().lower(): a for a in matrix.apps}
+        apps_by_slug = {str(a.slug or "").strip().lower(): a for a in matrix.apps if a.slug}
 
         applied_apps: List[str] = []
         assignments: Dict[str, str] = template["assignments"]

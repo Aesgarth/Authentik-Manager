@@ -22,7 +22,7 @@ class GroupSchema(BaseModel):
 
 class BoundGroupRef(BaseModel):
     pk: str
-    name: str
+    name: str = ""
     is_granular_user: bool = False
     is_granular_admin: bool = False
     is_admin_group: bool = False
@@ -30,7 +30,7 @@ class BoundGroupRef(BaseModel):
 class ApplicationSchema(BaseModel):
     pk: str # UUID
     name: str
-    slug: str
+    slug: Optional[str] = ""
     group: Optional[str] = None # Category in Authentik UI
     meta_icon: Optional[str] = None
     meta_description: Optional[str] = None

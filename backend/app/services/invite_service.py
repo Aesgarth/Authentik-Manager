@@ -16,54 +16,103 @@ logger = logging.getLogger("authentik_manager.invite_service")
 
 EXPRESSION_POLICY_TEMPLATE = '''# Authentik Enrollment Flow Expression Policy
 # Name: Assign Invitation Pre-configured Groups
-# Bind this policy to your Enrollment Flow BEFORE the User Write Stage
+# Bind this policy to your Enrollment Flow BEFORE or ON the User Write Stage
 from authentik.core.models import Group
 
-# 1. Retrieve the invitation from context
-inv = (
-    context.get("invitation")
-    or getattr(request, "context", {}).get("invitation")
+# 1. Extract pre-assigned groups from prompt_data (where Invitation Stage injects fixed_data)
+prompt_data = (
+    getattr(request, "context", {}).get("prompt_data", {})
+    if hasattr(request, "context") and isinstance(request.context, dict)
+    else context.get("prompt_data", {})
 )
-if not inv and hasattr(request, "context") and "flow_plan" in request.context:
-    inv = getattr(request.context["flow_plan"], "context", {}).get("invitation")
-if not inv and "flow_plan" in context:
-    inv = getattr(context["flow_plan"], "context", {}).get("invitation")
 
 target_groups = []
-if inv:
-    fixed_data = getattr(inv, "fixed_data", None)
-    if fixed_data is None and isinstance(inv, dict):
-        fixed_data = inv.get("fixed_data", {})
-    if isinstance(fixed_data, dict):
-        target_groups = fixed_data.get("groups", [])
+if isinstance(prompt_data, dict):
+    target_groups = (
+        prompt_data.get("groups_to_add")
+        or prompt_data.get("groups")
+        or prompt_data.get("group_names")
+        or []
+    )
 
-# Fallback: check prompt_data or request.context
+# Fallback: check flow_plan context
+if not target_groups and hasattr(request, "context") and isinstance(request.context, dict) and "flow_plan" in request.context:
+    fp_ctx = getattr(request.context["flow_plan"], "context", {})
+    if isinstance(fp_ctx, dict):
+        fp_prompt = fp_ctx.get("prompt_data", {})
+        if isinstance(fp_prompt, dict):
+            target_groups = (
+                fp_prompt.get("groups_to_add")
+                or fp_prompt.get("groups")
+                or fp_prompt.get("group_names")
+                or []
+            )
+
+# Fallback: check direct invitation object if present in context
 if not target_groups:
-    prompt_data = context.get("prompt_data") or getattr(request, "context", {}).get("prompt_data", {})
-    if isinstance(prompt_data, dict):
-        target_groups = prompt_data.get("groups", [])
+    inv = context.get("invitation") or (getattr(request, "context", {}).get("invitation") if hasattr(request, "context") else None)
+    if inv:
+        fd = getattr(inv, "fixed_data", None) or (inv.get("fixed_data", {}) if isinstance(inv, dict) else {})
+        if isinstance(fd, dict):
+            target_groups = fd.get("groups_to_add") or fd.get("groups") or fd.get("group_names") or []
+
+if isinstance(target_groups, str):
+    target_groups = [target_groups]
 
 if target_groups:
     resolved_groups = []
     for g_id in target_groups:
+        g_str = str(g_id).strip()
+        if not g_str:
+            continue
         try:
-            # Lookup by UUID or Group Name
-            group = Group.objects.get(pk=g_id) if len(str(g_id)) == 36 else Group.objects.get(name=g_id)
-            resolved_groups.append(group)
+            # Lookup by UUID (length 36) or by Group Name
+            if len(g_str) == 36:
+                grp = Group.objects.get(pk=g_str)
+            else:
+                grp = Group.objects.get(name=g_str)
+            if grp not in resolved_groups:
+                resolved_groups.append(grp)
         except Group.DoesNotExist:
-            ak_logger.warning(f"Group {g_id} not found during invitation enrollment")
+            try:
+                grp = Group.objects.get(name=g_str)
+                if grp not in resolved_groups:
+                    resolved_groups.append(grp)
+            except Group.DoesNotExist:
+                ak_logger.warning(f"Group {g_str} not found during invitation enrollment")
+        except Exception as e:
+            ak_logger.warning(f"Error resolving group {g_str}: {e}")
 
     if resolved_groups:
-        # Populate flow_plan context for the User Write Stage
-        flow_plan = context.get("flow_plan") or getattr(request, "context", {}).get("flow_plan")
+        ak_logger.info(f"Assigning {len(resolved_groups)} invitation groups: {[g.name for g in resolved_groups]}")
+
+        # Method A: Set on flow_plan context (consumed by User Write Stage)
+        flow_plan = (
+            getattr(request, "context", {}).get("flow_plan")
+            if hasattr(request, "context") and isinstance(request.context, dict)
+            else context.get("flow_plan")
+        )
         if flow_plan and hasattr(flow_plan, "context"):
-            if "groups" not in flow_plan.context:
+            if "groups" not in flow_plan.context or not isinstance(flow_plan.context["groups"], list):
                 flow_plan.context["groups"] = []
-            flow_plan.context["groups"].extend(resolved_groups)
+            for rg in resolved_groups:
+                if rg not in flow_plan.context["groups"]:
+                    flow_plan.context["groups"].append(rg)
         elif isinstance(flow_plan, dict) and "context" in flow_plan:
-            if "groups" not in flow_plan["context"]:
+            if "groups" not in flow_plan["context"] or not isinstance(flow_plan["context"]["groups"], list):
                 flow_plan["context"]["groups"] = []
-            flow_plan["context"]["groups"].extend(resolved_groups)
+            for rg in resolved_groups:
+                if rg not in flow_plan["context"]["groups"]:
+                    flow_plan["context"]["groups"].append(rg)
+
+        # Method B: Direct assignment if pending_user is already saved to database
+        pending_user = context.get("pending_user") or (getattr(request, "context", {}).get("pending_user") if hasattr(request, "context") else None)
+        if pending_user and getattr(pending_user, "pk", None):
+            for rg in resolved_groups:
+                try:
+                    pending_user.groups.add(rg)
+                except Exception:
+                    pass
 
 return True
 '''
@@ -291,11 +340,14 @@ class InviteService:
                     if isinstance(ev_inv, dict):
                         ev_inv_pk = str(ev_inv.get("pk") or "")
                         ev_inv_name = str(ev_inv.get("name") or "")
-                        if ev_user:
-                            if ev_inv_pk:
-                                inv_to_user[ev_inv_pk] = ev_user
-                            if ev_inv_name:
-                                inv_to_user[ev_inv_name] = ev_user
+                        if ev_user and isinstance(ev_user, dict):
+                            u_name = str(ev_user.get("username") or "").lower()
+                            u_pk = ev_user.get("pk")
+                            if u_pk and u_name not in ("anonymoususer", "anonymous", ""):
+                                if ev_inv_pk:
+                                    inv_to_user[ev_inv_pk] = ev_user
+                                if ev_inv_name:
+                                    inv_to_user[ev_inv_name] = ev_user
 
             redeemed_count = 0
 
@@ -321,7 +373,12 @@ class InviteService:
                         u_email = str(u.get("email") or "").strip().lower()
                         u_name = str(u.get("name") or "").strip().lower()
                         u_user = str(u.get("username") or "").strip().lower()
-                        if (target_email and u_email == target_email) or (inv_name and inv_name.lower() in [u_name, u_user]):
+                        email_match = bool(target_email and target_email == u_email)
+                        name_match = bool(
+                            inv_name and len(inv_name) >= 3 and
+                            (inv_name.lower() in u_name or inv_name.lower() in u_user or u_name in inv_name.lower())
+                        )
+                        if email_match or name_match:
                             matched_user = u
                             break
 
@@ -329,34 +386,39 @@ class InviteService:
                     user_pk = matched_user.get("pk")
                     if isinstance(user_pk, str) and user_pk.isdigit():
                         user_pk = int(user_pk)
-                    username = matched_user.get("username") or matched_user.get("email") or f"User #{user_pk}"
-                    assigned_groups = json.loads(invite["assigned_groups"])
 
-                    # Assign groups via API
-                    for g_pk in assigned_groups:
-                        try:
-                            await authentik_client.add_user_to_group(g_pk, user_pk)
-                        except Exception as e:
-                            logger.warning(f"Error adding user {user_pk} to group {g_pk}: {e}")
+                    # Only proceed if we have a valid, non-anonymous user PK
+                    if user_pk and isinstance(user_pk, int) and user_pk > 0:
+                        username = str(matched_user.get("username") or matched_user.get("email") or f"User #{user_pk}")
+                        assigned_groups = json.loads(invite["assigned_groups"])
 
-                    # Mark redeemed in DB
-                    async with aiosqlite.connect(db_path) as db:
-                        await db.execute(
-                            "UPDATE tracked_invites SET status = 'redeemed', redeemed_by = ? WHERE id = ?",
-                            (f"{username} (#{user_pk})", invite["id"])
+                        # Assign groups via API
+                        assigned_count = 0
+                        for g_pk in assigned_groups:
+                            try:
+                                await authentik_client.add_user_to_group(g_pk, user_pk)
+                                assigned_count += 1
+                            except Exception as e:
+                                logger.warning(f"Error adding user {user_pk} to group {g_pk}: {e}")
+
+                        # Mark redeemed in DB
+                        async with aiosqlite.connect(db_path) as db:
+                            await db.execute(
+                                "UPDATE tracked_invites SET status = 'redeemed', redeemed_by = ? WHERE id = ?",
+                                (f"{username} (#{user_pk})", invite["id"])
+                            )
+                            await db.commit()
+
+                        await audit_service.log(
+                            actor="AUTO_SYNC_WORKER",
+                            action="AUTO_ASSIGN_INVITE_GROUPS",
+                            target_type="USER",
+                            target_name=username,
+                            target_id=str(user_pk),
+                            details=f"Assigned {assigned_count}/{len(assigned_groups)} groups from invite #{invite['id']} ({invite['name']})",
+                            status="SUCCESS"
                         )
-                        await db.commit()
-
-                    await audit_service.log(
-                        actor="AUTO_SYNC_WORKER",
-                        action="AUTO_ASSIGN_INVITE_GROUPS",
-                        target_type="USER",
-                        target_name=username,
-                        target_id=str(user_pk),
-                        details=f"Assigned {len(assigned_groups)} groups from invite #{invite['id']} ({invite['name']})",
-                        status="SUCCESS"
-                    )
-                    redeemed_count += 1
+                        redeemed_count += 1
 
                     try:
                         assigned_apps_list = json.loads(invite["assigned_apps"])

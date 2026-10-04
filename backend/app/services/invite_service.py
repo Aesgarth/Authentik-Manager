@@ -707,7 +707,12 @@ class InviteService:
     @staticmethod
     def get_flow_guide() -> Dict[str, Any]:
         base_host = settings.APP_HOST if settings.APP_HOST not in ("0.0.0.0", "") else "authentik-manager"
+        from app.services.settings_service import settings_service
+        secret = settings_service.get_webhook_secret()
+
         webhook_url = f"http://{base_host}:{settings.APP_PORT}/api/webhooks/authentik"
+        if secret:
+            webhook_url += f"?token={secret}"
 
         webhook_snippet = f'''# Append this notification snippet to your Guest Write Expression Policy in Authentik:
 # (Notifies Authentik Access Manager upon registration to assign pre-selected application groups)

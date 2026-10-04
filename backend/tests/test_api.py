@@ -552,6 +552,53 @@ async def test_webhook_endpoints():
         assert generic_res.status_code == 200
         assert generic_res.json()["status"] == "received"
 
+        # 5. Test Webhook Security: Configure a webhook secret
+        put_res = await client.put(
+            "/api/settings",
+            json={"webhook_secret": "my-super-secret-token-12345"}
+        )
+        assert put_res.status_code == 200
+        assert put_res.json()["webhook_secret_configured"] is True
+
+        # Request WITHOUT token should fail with 401
+        unauth_res = await client.post(
+            "/api/webhooks/authentik",
+            json={"email": "webhook-test@example.com"}
+        )
+        assert unauth_res.status_code == 401
+
+        # Request with WRONG token should fail with 401
+        wrong_res = await client.post(
+            "/api/webhooks/authentik?token=wrong-token",
+            json={"email": "webhook-test@example.com"}
+        )
+        assert wrong_res.status_code == 401
+
+        # Request with VALID token query parameter should succeed with 200
+        auth_param_res = await client.post(
+            "/api/webhooks/authentik?token=my-super-secret-token-12345",
+            json={"email": "webhook-test@example.com"}
+        )
+        assert auth_param_res.status_code == 200
+        assert auth_param_res.json()["status"] == "received"
+
+        # Request with VALID token HTTP header should succeed with 200
+        auth_header_res = await client.post(
+            "/api/webhooks/authentik",
+            headers={"X-Webhook-Token": "my-super-secret-token-12345"},
+            json={"email": "webhook-test@example.com"}
+        )
+        assert auth_header_res.status_code == 200
+        assert auth_header_res.json()["status"] == "received"
+
+        # Clear secret to restore open mode
+        clear_res = await client.put(
+            "/api/settings",
+            json={"webhook_secret": ""}
+        )
+        assert clear_res.status_code == 200
+        assert clear_res.json()["webhook_secret_configured"] is False
+
 
 
 

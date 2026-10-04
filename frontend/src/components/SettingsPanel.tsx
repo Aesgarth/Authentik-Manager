@@ -91,6 +91,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [oidcConfigured, setOidcConfigured] = useState(false);
   const [isOidcModalOpen, setIsOidcModalOpen] = useState(false);
 
+  // Incoming Webhook Secret
+  const [webhookSecret, setWebhookSecret] = useState('');
+  const [showWebhookSecret, setShowWebhookSecret] = useState(false);
+  const [webhookSecretMasked, setWebhookSecretMasked] = useState('');
+  const [webhookSecretConfigured, setWebhookSecretConfigured] = useState(false);
+
   useEffect(() => {
     loadSettings();
   }, []);
@@ -134,6 +140,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       setOidcRedirectUri(s.oidc_redirect_uri || '');
       setOidcAdminGroup(s.oidc_admin_group || 'authentik Admins');
       setOidcConfigured(s.oidc_configured);
+      setWebhookSecretMasked(s.webhook_secret_masked || '');
+      setWebhookSecretConfigured(s.webhook_secret_configured || false);
     } catch (err: any) {
       onShowToast(err.message || 'Failed to load settings', 'error');
     } finally {
@@ -249,6 +257,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         payload.oidc_client_secret = oidcClientSecret.trim();
       }
 
+      if (webhookSecret.trim()) {
+        payload.webhook_secret = webhookSecret.trim();
+      }
+
       const updated = await api.updateSettings(payload);
       setTokenMasked(updated.authentik_token_masked);
       setTokenConfigured(updated.authentik_token_configured);
@@ -262,6 +274,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       setAdminPassword('');
       setAdminPasswordConfigured(updated.admin_password_configured);
       setOidcConfigured(updated.oidc_configured);
+
+      setWebhookSecretMasked(updated.webhook_secret_masked || '');
+      setWebhookSecretConfigured(updated.webhook_secret_configured || false);
+      setWebhookSecret('');
 
       setAuthentikToken(''); // Clear input after saving
       onShowToast('Settings updated successfully and saved to encrypted database!', 'success');
@@ -532,6 +548,56 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-3 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-[#fd7e14]"
                 />
               </div>
+            </div>
+
+            {/* Incoming Authentik Webhook Secret */}
+            <div className="pt-4 border-t border-[#25354b]/60">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                  <Key className="h-3.5 w-3.5 text-[#fd7e14]" />
+                  <span>Incoming Authentik Webhook Secret (Optional)</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newSecret = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+                        .map(b => b.toString(16).padStart(2, '0')).join('');
+                      setWebhookSecret(newSecret);
+                      setShowWebhookSecret(true);
+                      onShowToast('Generated secure 32-char webhook secret token!', 'info');
+                    }}
+                    className="text-[10px] text-orange-400 hover:text-orange-300 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    Generate Secret
+                  </button>
+                  {webhookSecretConfigured && (
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      Current: {webhookSecretMasked}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="relative">
+                <input
+                  type={showWebhookSecret ? 'text' : 'password'}
+                  value={webhookSecret}
+                  onChange={(e) => setWebhookSecret(e.target.value)}
+                  placeholder={webhookSecretConfigured ? 'Enter new secret to replace, or clear to remove protection...' : 'Optional: e.g. a strong secret token...'}
+                  className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl pl-3.5 pr-10 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14] font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowWebhookSecret(!showWebhookSecret)}
+                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200"
+                >
+                  {showWebhookSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-500 mt-1">
+                When set, incoming webhook calls to <code className="text-[#fd7e14]">/api/webhooks/authentik</code> require <code className="text-[#fd7e14]">?token=&lt;secret&gt;</code> or <code className="text-[#fd7e14]">X-Webhook-Token: &lt;secret&gt;</code> header.
+              </p>
             </div>
           </div>
         </div>

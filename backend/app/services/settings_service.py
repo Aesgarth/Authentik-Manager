@@ -39,6 +39,7 @@ class SettingsService:
         self._telegram_admin_chat_ids: Optional[str] = None
         self._default_lease_duration_hours: int = 72
         self._default_invite_expiry_days: int = 7
+        self._webhook_secret: Optional[str] = None
 
     def encrypt_secret(self, raw: str) -> str:
         if not raw:
@@ -110,6 +111,9 @@ class SettingsService:
                     settings.AUTH_METHOD = val
                 elif key == "admin_password" and val:
                     settings.ADMIN_PASSWORD = val
+                elif key == "webhook_secret":
+                    self._webhook_secret = val if val else None
+                    settings.WEBHOOK_SECRET = val if val else None
                 elif key == "app_url" and val:
                     self._app_url = val
                 elif key == "oidc_client_id" and val:
@@ -155,9 +159,14 @@ class SettingsService:
             return "••••••••"
         return f"••••••••{token[-4:]}"
 
+    def get_webhook_secret(self) -> Optional[str]:
+        return self._webhook_secret or getattr(settings, "WEBHOOK_SECRET", None)
+
     async def get_settings_response(self) -> SettingsResponse:
         token = settings.AUTHENTIK_TOKEN
         token_configured = bool(token and token != "your_authentik_api_bearer_token_here")
+        webhook_sec = self.get_webhook_secret()
+        webhook_secret_configured = bool(webhook_sec)
         return SettingsResponse(
             authentik_url=settings.AUTHENTIK_URL,
             authentik_token_masked=self._mask_token(token) if token_configured else "",
@@ -182,6 +191,8 @@ class SettingsService:
             # OIDC & Security
             auth_method=settings.AUTH_METHOD,
             admin_password_configured=bool(settings.ADMIN_PASSWORD and settings.ADMIN_PASSWORD != "admin123"),
+            webhook_secret_configured=webhook_secret_configured,
+            webhook_secret_masked=self._mask_token(webhook_sec) if webhook_secret_configured else "",
             app_url=self._app_url,
             oidc_client_id=settings.OIDC_CLIENT_ID or "",
             oidc_client_secret_masked=self._mask_token(settings.OIDC_CLIENT_SECRET) if settings.OIDC_CLIENT_SECRET else "",
@@ -312,6 +323,20 @@ class SettingsService:
                 await set_app_setting("admin_password", clean_pw, is_secret=True)
                 settings.ADMIN_PASSWORD = clean_pw
                 updated_keys.append("admin_password")
+
+        if req.webhook_secret is not None:
+            clean_ws = req.webhook_secret.strip()
+            if clean_ws and not clean_ws.startswith("••"):
+                encrypted = self.encrypt_secret(clean_ws)
+                await set_app_setting("webhook_secret", encrypted, is_secret=True)
+                self._webhook_secret = clean_ws
+                settings.WEBHOOK_SECRET = clean_ws
+                updated_keys.append("webhook_secret")
+            elif clean_ws == "":
+                await set_app_setting("webhook_secret", "", is_secret=True)
+                self._webhook_secret = None
+                settings.WEBHOOK_SECRET = None
+                updated_keys.append("webhook_secret")
 
         if req.app_url is not None:
             clean_app_url = req.app_url.strip().rstrip("/")

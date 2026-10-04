@@ -258,6 +258,8 @@ class SettingsResponse(BaseModel):
     # OIDC & Security Settings
     auth_method: str = "none"
     admin_password_configured: bool = False
+    webhook_secret_configured: bool = False
+    webhook_secret_masked: str = ""
     app_url: Optional[str] = None
     oidc_client_id: Optional[str] = None
     oidc_client_secret_masked: str = ""
@@ -289,6 +291,7 @@ class UpdateSettingsRequest(BaseModel):
     # OIDC & Security Settings
     auth_method: Optional[str] = None
     admin_password: Optional[str] = None
+    webhook_secret: Optional[str] = None
     app_url: Optional[str] = None
     oidc_client_id: Optional[str] = None
     oidc_client_secret: Optional[str] = None

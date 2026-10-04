@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # Security & Tool Authentication: 'none', 'password', 'forward_auth', or 'oidc'
     AUTH_METHOD: Literal["none", "password", "forward_auth", "oidc"] = "none"
     ADMIN_PASSWORD: str = "admin123"
+    WEBHOOK_SECRET: Optional[str] = None
     
     # OIDC Configuration (for when AUTH_METHOD="oidc")
     OIDC_ISSUER_URL: Optional[str] = None      # e.g., https://auth.lan/application/o/authentik-manager/

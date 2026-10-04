@@ -163,6 +163,8 @@ export interface AppSettings {
   // OIDC & Security Settings
   auth_method: 'none' | 'password' | 'forward_auth' | 'oidc';
   admin_password_configured: boolean;
+  webhook_secret_configured?: boolean;
+  webhook_secret_masked?: string | null;
   app_url?: string | null;
   oidc_client_id?: string | null;
   oidc_client_secret_masked?: string | null;
@@ -195,6 +197,7 @@ export interface UpdateSettingsPayload {
   // OIDC & Security Settings
   auth_method?: string;
   admin_password?: string;
+  webhook_secret?: string;
   app_url?: string;
   oidc_client_id?: string;
   oidc_client_secret?: string;

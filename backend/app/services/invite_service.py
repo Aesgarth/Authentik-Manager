@@ -764,9 +764,12 @@ class InviteService:
                 elif inv_name and inv_name in inv_to_user:
                     matched_user = inv_to_user[inv_name]
 
-                # Strategy 2: Match by target email if provided
-                if not matched_user and target_email and target_email in users_by_email:
-                    matched_user = users_by_email[target_email]
+                # Strategy 2: Match by target email if provided (check both email and username)
+                if not matched_user and target_email:
+                    if target_email in users_by_email:
+                        matched_user = users_by_email[target_email]
+                    elif target_email in users_by_username:
+                        matched_user = users_by_username[target_email]
 
                 # Strategy 3: Check single-use invitation consumption
                 if not matched_user and invite["single_use"] and inv_pk and inv_pk not in active_inv_pks:

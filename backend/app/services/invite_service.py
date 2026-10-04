@@ -122,11 +122,13 @@ def is_valid_human_user(user: Dict[str, Any]) -> bool:
     """
     Checks if a user dictionary represents a legitimate human user and NOT a service account,
     internal system account, or anonymous user.
+    Note: In Authentik, standard enrolled human users have type='internal' (or 'external').
+    Only actual service accounts have type='service_account'.
     """
     if not isinstance(user, dict):
         return False
     u_type = str(user.get("type") or "").strip().lower()
-    if u_type in ("service_account", "internal"):
+    if u_type == "service_account":
         return False
     username = str(user.get("username") or "").strip().lower()
     if not username:
@@ -137,6 +139,8 @@ def is_valid_human_user(user: Dict[str, Any]) -> bool:
         return False
     name = str(user.get("name") or "").strip().lower()
     if name.startswith(("service-", "service_", "ak-", "authentik-", "internal-", "bot-")):
+        return False
+    if user.get("is_active") is False:
         return False
     return True
 

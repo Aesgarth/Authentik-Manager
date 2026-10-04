@@ -608,6 +608,7 @@ async def test_service_account_exclusion_and_repair():
 
     # 1. Test is_valid_human_user validator
     assert is_valid_human_user({"pk": 10, "username": "seedwordgame@gmail.com", "email": "seedwordgame@gmail.com", "type": "external"}) is True
+    assert is_valid_human_user({"pk": 10, "username": "seedwordgame@gmail.com", "email": "seedwordgame@gmail.com", "type": "internal"}) is True
     assert is_valid_human_user({"pk": 11, "username": "service-whatsapp-bot", "type": "service_account"}) is False
     assert is_valid_human_user({"pk": 12, "username": "akadmin", "type": "internal"}) is False
     assert is_valid_human_user({"pk": 13, "username": "anonymoususer"}) is False

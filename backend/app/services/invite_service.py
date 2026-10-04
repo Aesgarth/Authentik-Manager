@@ -152,23 +152,32 @@ class InviteService:
         group_pk_to_name = {str(g["pk"]): g["name"] for g in all_groups}
         target_group_names = [group_pk_to_name[pk] for pk in req.group_pks if pk in group_pk_to_name]
 
-        fixed_data = {
-            "groups": req.group_pks,
-            "groups_to_add": req.group_pks + target_group_names,
-            "group_names": target_group_names,
-            "assigned_apps": req.app_names,
-        }
-        if req.email:
-            fixed_data["email"] = req.email.strip()
-        if req.phone:
-            fixed_data["phone"] = req.phone.strip()
-
-        # 1. Create invitation in Authentik
         # Authentik Invitation 'name' is a SlugField (^[a-zA-Z0-9_-]+$, max 50 chars)
         clean_slug = re.sub(r'[^a-zA-Z0-9_-]+', '-', req.name.strip().lower()).strip('-')
         clean_slug = clean_slug[:30].strip('-')
         invite_slug = f"invite-{clean_slug}-{secrets.token_hex(4)}" if clean_slug else f"invite-{secrets.token_hex(4)}"
 
+        fixed_data = {
+            "groups": req.group_pks,
+            "groups_to_add": req.group_pks + target_group_names,
+            "group_names": target_group_names,
+            "assigned_apps": req.app_names,
+            "invitation_slug": invite_slug,
+            "attributes": {
+                "invitation_slug": invite_slug,
+                "invited_name": req.name.strip(),
+            },
+            "attributes.invitation_slug": invite_slug,
+            "attributes.invited_name": req.name.strip(),
+        }
+        if req.email:
+            fixed_data["email"] = req.email.strip()
+        if req.phone:
+            fixed_data["phone"] = req.phone.strip()
+            fixed_data["attributes"]["phone"] = req.phone.strip()
+            fixed_data["attributes.phone"] = req.phone.strip()
+
+        # 1. Create invitation in Authentik
         authentik_invite = await authentik_client.create_invitation(
             name=invite_slug,
             expires=expires_at,
@@ -362,12 +371,19 @@ class InviteService:
                 except Exception as e:
                     logger.warning(f"Error adding user {user_pk} to group {g_pk}: {e}")
 
-            # Mark redeemed in DB
+            # Mark redeemed in DB (and populate email if it was previously empty)
+            target_user_email = user.get("email")
             async with aiosqlite.connect(db_path) as db:
-                await db.execute(
-                    "UPDATE tracked_invites SET status = 'redeemed', redeemed_by = ? WHERE id = ?",
-                    (f"{username} (#{user_pk})", invite["id"])
-                )
+                if target_user_email and not invite["email"]:
+                    await db.execute(
+                        "UPDATE tracked_invites SET status = 'redeemed', redeemed_by = ?, email = ? WHERE id = ?",
+                        (f"{username} (#{user_pk})", str(target_user_email).strip().lower(), invite["id"])
+                    )
+                else:
+                    await db.execute(
+                        "UPDATE tracked_invites SET status = 'redeemed', redeemed_by = ? WHERE id = ?",
+                        (f"{username} (#{user_pk})", invite["id"])
+                    )
                 await db.commit()
 
             await audit_service.log(
@@ -718,37 +734,43 @@ class InviteService:
 
             # 5. Fetch Authentik events (invitation_used, login)
             events_inv = await authentik_client.get_events(action="invitation_used", page_size=100)
-            events_login = await authentik_client.get_events(action="login", page_size=50)
+            events_login = await authentik_client.get_events(action="login", page_size=100)
 
             # Correlate invitation_used with login events by client_ip (strictly human users only)
             inv_to_user: Dict[str, Dict[str, Any]] = {}
             for ev in events_inv:
                 ev_context = ev.get("context", {})
                 if isinstance(ev_context, dict):
-                    ev_inv = ev_context.get("invitation", {})
-                    if isinstance(ev_inv, dict):
-                        ev_inv_pk = str(ev_inv.get("pk") or "")
-                        ev_inv_name = str(ev_inv.get("name") or "")
-                        ev_ip = ev.get("client_ip")
+                    ev_inv = ev_context.get("invitation")
+                    ev_inv_pk = ""
+                    ev_inv_name = ""
+                    if isinstance(ev_inv, str):
+                        ev_inv_pk = ev_inv.strip()
+                    elif isinstance(ev_inv, dict):
+                        ev_inv_pk = str(ev_inv.get("pk") or ev_inv.get("id") or "").strip()
+                        ev_inv_name = str(ev_inv.get("name") or "").strip()
+                    if not ev_inv_pk:
+                        ev_inv_pk = str(ev_context.get("invitation_pk") or "").strip()
 
-                        ev_user = ev.get("user")
-                        if ev_user and isinstance(ev_user, dict) and is_valid_human_user(ev_user):
-                            if ev_inv_pk:
-                                inv_to_user[ev_inv_pk] = ev_user
-                            if ev_inv_name:
-                                inv_to_user[ev_inv_name] = ev_user
-                            continue
+                    ev_ip = ev.get("client_ip")
+                    ev_user = ev.get("user")
+                    if ev_user and isinstance(ev_user, dict) and is_valid_human_user(ev_user):
+                        if ev_inv_pk:
+                            inv_to_user[ev_inv_pk] = ev_user
+                        if ev_inv_name:
+                            inv_to_user[ev_inv_name] = ev_user
+                        continue
 
-                        if ev_ip:
-                            for log_ev in events_login:
-                                log_user = log_ev.get("user")
-                                if log_user and isinstance(log_user, dict) and log_ev.get("client_ip") == ev_ip:
-                                    if is_valid_human_user(log_user):
-                                        if ev_inv_pk:
-                                            inv_to_user[ev_inv_pk] = log_user
-                                        if ev_inv_name:
-                                            inv_to_user[ev_inv_name] = log_user
-                                        break
+                    if ev_ip:
+                        for log_ev in events_login:
+                            log_user = log_ev.get("user")
+                            if log_user and isinstance(log_user, dict) and log_ev.get("client_ip") == ev_ip:
+                                if is_valid_human_user(log_user):
+                                    if ev_inv_pk:
+                                        inv_to_user[ev_inv_pk] = log_user
+                                    if ev_inv_name:
+                                        inv_to_user[ev_inv_name] = log_user
+                                    break
 
             redeemed_count = 0
 
@@ -757,12 +779,33 @@ class InviteService:
                 inv_pk = str(invite["invitation_pk"] or "")
                 inv_name = str(invite["name"] or "")
                 target_email = str(invite["email"] or "").strip().lower()
+                target_phone = str(invite["phone"] or "").strip()
+
+                # Strategy 0: Direct Match via User Attributes (invitation_pk, invitation_slug, or phone)
+                for u in human_users:
+                    u_attrs = u.get("attributes") or {}
+                    if not isinstance(u_attrs, dict):
+                        continue
+                    u_inv_pk = str(u_attrs.get("invitation_pk") or u_attrs.get("invitation") or "").strip()
+                    u_inv_slug = str(u_attrs.get("invitation_slug") or "").strip().lower()
+                    u_phone = str(u_attrs.get("phone") or u_attrs.get("phoneNumber") or "").strip()
+
+                    if u_inv_pk and u_inv_pk == inv_pk:
+                        matched_user = u
+                        break
+                    if u_inv_slug and inv_name and u_inv_slug == inv_name.lower():
+                        matched_user = u
+                        break
+                    if target_phone and u_phone and (target_phone == u_phone or target_phone in u_phone or u_phone in target_phone):
+                        matched_user = u
+                        break
 
                 # Strategy 1: Check Authentik invitation_used event correlation
-                if inv_pk and inv_pk in inv_to_user:
-                    matched_user = inv_to_user[inv_pk]
-                elif inv_name and inv_name in inv_to_user:
-                    matched_user = inv_to_user[inv_name]
+                if not matched_user:
+                    if inv_pk and inv_pk in inv_to_user:
+                        matched_user = inv_to_user[inv_pk]
+                    elif inv_name and inv_name in inv_to_user:
+                        matched_user = inv_to_user[inv_name]
 
                 # Strategy 2: Match by target email if provided (check both email and username)
                 if not matched_user and target_email:
@@ -777,7 +820,13 @@ class InviteService:
                         u_email = str(u.get("email") or "").strip().lower()
                         u_name = str(u.get("name") or "").strip().lower()
                         u_user = str(u.get("username") or "").strip().lower()
+                        u_attrs = u.get("attributes") or {}
+                        u_phone = str(u_attrs.get("phone") or u_attrs.get("phoneNumber") or "").strip() if isinstance(u_attrs, dict) else ""
+
                         if target_email and (target_email == u_email or target_email in u_user):
+                            matched_user = u
+                            break
+                        if target_phone and u_phone and (target_phone == u_phone or target_phone in u_phone or u_phone in target_phone):
                             matched_user = u
                             break
                         if inv_name and len(inv_name) >= 3:
@@ -912,13 +961,24 @@ class InviteService:
 
         webhook_snippet = f'''# Append this notification snippet to your Guest Write Expression Policy in Authentik:
 # (Notifies Authentik Access Manager upon registration to assign pre-selected application groups)
+inv = request.context.get("invitation")
+inv_pk = str(getattr(inv, "pk", "") if inv else (request.context.get("prompt_data", {{}}).get("invitation_pk", "") or ""))
+
+if "attributes" not in request.context["prompt_data"]:
+    request.context["prompt_data"]["attributes"] = {{}}
+if inv_pk:
+    request.context["prompt_data"]["attributes"]["invitation_pk"] = inv_pk
+prompt_phone = request.context.get("prompt_data", {{}}).get("phone")
+if prompt_phone:
+    request.context["prompt_data"]["attributes"]["phone"] = str(prompt_phone)
+
 try:
     import urllib.request, json
     mgr_url = "{webhook_url}"
     payload = json.dumps({{
         "email": email,
         "username": email,
-        "invitation_pk": str(request.context.get("invitation", {{}}).get("pk", "") if isinstance(request.context.get("invitation"), dict) else getattr(request.context.get("invitation"), "pk", ""))
+        "invitation_pk": inv_pk
     }}).encode("utf-8")
     req = urllib.request.Request(mgr_url, data=payload, headers={{"Content-Type": "application/json"}})
     urllib.request.urlopen(req, timeout=2)

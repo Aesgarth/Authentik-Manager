@@ -500,6 +500,58 @@ async def test_install_flow_policy_and_sync():
         assert sync_data["status"] == "ok"
         assert "redeemed_count" in sync_data
 
+@pytest.mark.asyncio
+async def test_webhook_endpoints():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Test Webhook status endpoint
+        status_res = await client.get("/api/webhooks/authentik/status")
+        assert status_res.status_code == 200
+        status_data = status_res.json()
+        assert status_data["status"] == "active"
+        assert "/api/webhooks/authentik" in status_data["webhook_endpoint"]
+
+        # 2. Create an invite with specific app groups and an email
+        inv_res = await client.post(
+            "/api/invites",
+            json={
+                "name": "Webhook Test User",
+                "email": "webhook-test@example.com",
+                "expires_in_days": 7,
+                "single_use": True,
+                "group_pks": ["101", "102"],
+                "app_names": ["Nextcloud", "Plex"]
+            }
+        )
+        assert inv_res.status_code == 200
+        invite_data = inv_res.json()
+        assert invite_data["status"] == "pending"
+
+        # 3. Test sending a webhook payload simulating Authentik Expression Policy ping
+        webhook_res = await client.post(
+            "/api/webhooks/authentik",
+            json={
+                "email": "webhook-test@example.com",
+                "username": "webhook-test@example.com"
+            }
+        )
+        assert webhook_res.status_code == 200
+        webhook_data = webhook_res.json()
+        assert webhook_data["status"] == "received"
+
+        # 4. Also test Authentik generic notification webhook format
+        generic_res = await client.post(
+            "/api/webhooks/authentik",
+            json={
+                "event_user_email": "webhook-test@example.com",
+                "event_user_username": "webhook-test",
+                "body": "User enrolled",
+                "severity": "notice"
+            }
+        )
+        assert generic_res.status_code == 200
+        assert generic_res.json()["status"] == "received"
+
 
 
 

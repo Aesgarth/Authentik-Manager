@@ -9,7 +9,7 @@ from app.config import settings
 from app.database import init_db
 from app.worker import worker
 from app.services.settings_service import settings_service
-from app.routers import auth, matrix, apps, users, invites, audit, health, whatsapp, templates, settings as settings_router
+from app.routers import auth, matrix, apps, users, invites, audit, health, whatsapp, templates, settings as settings_router, webhooks
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -45,6 +45,7 @@ app.include_router(matrix.router)
 app.include_router(apps.router)
 app.include_router(users.router)
 app.include_router(invites.router)
+app.include_router(webhooks.router)
 app.include_router(audit.router)
 app.include_router(health.router)
 app.include_router(whatsapp.router)

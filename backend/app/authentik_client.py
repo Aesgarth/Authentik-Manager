@@ -349,6 +349,47 @@ class AuthentikClient:
         }
         return await self._request("POST", "/api/v3/policies/bindings/", json=payload)
 
+    # ==================== Notification Transports & Rules ====================
+
+    async def get_notification_transports(self) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            return getattr(self, "mock_transports", [])
+        return await self._get_all_paginated("/api/v3/events/transports/")
+
+    async def create_webhook_transport(self, name: str, webhook_url: str) -> Dict[str, Any]:
+        if self.demo_mode:
+            new_tr = {"pk": str(uuid.uuid4()), "name": name, "mode": "webhook", "webhook_url": webhook_url}
+            if not hasattr(self, "mock_transports"):
+                self.mock_transports = []
+            self.mock_transports.append(new_tr)
+            return new_tr
+        payload = {
+            "name": name,
+            "mode": "webhook",
+            "webhook_url": webhook_url,
+            "send_once": False,
+        }
+        return await self._request("POST", "/api/v3/events/transports/", json=payload)
+
+    async def get_notification_rules(self) -> List[Dict[str, Any]]:
+        if self.demo_mode:
+            return getattr(self, "mock_notification_rules", [])
+        return await self._get_all_paginated("/api/v3/events/rules/")
+
+    async def create_notification_rule(self, name: str, transports: List[str], severity: str = "notice") -> Dict[str, Any]:
+        if self.demo_mode:
+            new_r = {"pk": str(uuid.uuid4()), "name": name, "transports": transports, "severity": severity}
+            if not hasattr(self, "mock_notification_rules"):
+                self.mock_notification_rules = []
+            self.mock_notification_rules.append(new_r)
+            return new_r
+        payload = {
+            "name": name,
+            "transports": transports,
+            "severity": severity,
+        }
+        return await self._request("POST", "/api/v3/events/rules/", json=payload)
+
     # ==================== OIDC & Application Provisioning ====================
 
     async def get_flows(self, designation: Optional[str] = None) -> List[Dict[str, Any]]:

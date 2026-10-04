@@ -323,6 +323,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                       className="w-full bg-[#0b0f17] border border-[#25354b] rounded-lg pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14]"
                     />
                   </div>
+                  <p className="text-[10px] text-slate-400 mt-1">Recommended for instant auto-provisioning upon sign-up.</p>
                 </div>
 
                 <div>

@@ -118,6 +118,28 @@ if target_groups:
 return True
 '''
 
+def is_valid_human_user(user: Dict[str, Any]) -> bool:
+    """
+    Checks if a user dictionary represents a legitimate human user and NOT a service account,
+    internal system account, or anonymous user.
+    """
+    if not isinstance(user, dict):
+        return False
+    u_type = str(user.get("type") or "").strip().lower()
+    if u_type in ("service_account", "internal"):
+        return False
+    username = str(user.get("username") or "").strip().lower()
+    if not username:
+        return False
+    if username in ("anonymoususer", "anonymous", "akadmin"):
+        return False
+    if username.startswith(("service-", "service_", "ak-", "authentik-", "internal-", "bot-")):
+        return False
+    name = str(user.get("name") or "").strip().lower()
+    if name.startswith(("service-", "service_", "ak-", "authentik-", "internal-", "bot-")):
+        return False
+    return True
+
 class InviteService:
     async def create_invite(self, req: CreateInviteRequest, actor: str = "Admin") -> TrackedInviteSchema:
         expires_at: Optional[str] = None
@@ -321,6 +343,12 @@ class InviteService:
                 logger.warning(f"Cannot assign groups: invalid user_pk={user_pk}")
                 return False
 
+            if not is_valid_human_user(user):
+                logger.warning(
+                    f"Refusing to assign groups to non-human/service user: {user.get('username')} (pk={user_pk})"
+                )
+                return False
+
             username = str(user.get("username") or user.get("email") or f"User #{user_pk}")
             assigned_groups = json.loads(invite["assigned_groups"])
             db_path = get_db_path()
@@ -409,22 +437,27 @@ class InviteService:
             # 2. Lookup matching user in Authentik with retry to ensure Authentik DB write is finished
             matched_user = None
             for attempt in range(3):
-                users = await authentik_client.get_users()
+                all_users = await authentik_client.get_users()
+                human_users = [u for u in all_users if is_valid_human_user(u)]
                 if user_pk:
-                    matched_user = next((u for u in users if str(u.get("pk")) == str(user_pk)), None)
+                    matched_user = next((u for u in human_users if str(u.get("pk")) == str(user_pk)), None)
                 if not matched_user and email_norm:
-                    matched_user = next((u for u in users if str(u.get("email") or "").strip().lower() == email_norm), None)
+                    matched_user = next((u for u in human_users if str(u.get("email") or "").strip().lower() == email_norm), None)
                 if not matched_user and username_norm:
-                    matched_user = next((u for u in users if str(u.get("username") or "").strip().lower() == username_norm), None)
+                    matched_user = next((u for u in human_users if str(u.get("username") or "").strip().lower() == username_norm), None)
                 if matched_user:
                     break
                 if attempt < 2:
                     await asyncio.sleep(1.5)
 
             if not matched_user:
-                logger.info(f"Webhook received but user not resolved in Authentik yet (email={email}, user={username}). Triggering sync.")
+                logger.info(f"Webhook received but human user not resolved in Authentik yet (email={email}, user={username}). Triggering sync.")
                 redeemed = await self.sync_redemptions()
                 return {"status": "pending_sync", "redeemed_count": redeemed}
+
+            if not is_valid_human_user(matched_user):
+                logger.warning(f"Webhook matched non-human user {matched_user.get('username')}. Ignoring.")
+                return {"status": "ignored", "reason": "Target user is not a valid human user"}
 
             target_pk = matched_user.get("pk")
             target_username = str(matched_user.get("username") or matched_user.get("email") or f"User #{target_pk}")
@@ -457,8 +490,11 @@ class InviteService:
                     active_pks = {str(a.get("pk")) for a in active_invs}
                     for i in pending_invites:
                         if i["single_use"] and str(i["invitation_pk"]) not in active_pks:
-                            matched_invite = i
-                            break
+                            # Verify email does not conflict
+                            i_email = str(i["email"] or "").strip().lower()
+                            if not i_email or not target_email or i_email == target_email:
+                                matched_invite = i
+                                break
                 except Exception:
                     pass
 
@@ -466,14 +502,24 @@ class InviteService:
             if not matched_invite:
                 for i in pending_invites:
                     inv_name = str(i["name"] or "").strip().lower()
+                    i_email = str(i["email"] or "").strip().lower()
+                    if target_email and i_email and target_email != i_email:
+                        continue
                     if inv_name and len(inv_name) >= 3:
-                        if inv_name in target_username.lower() or inv_name in target_email or target_username.lower() in inv_name:
+                        if (target_username and inv_name in target_username.lower()) or (target_email and inv_name in target_email):
                             matched_invite = i
                             break
 
-            # Check 5: If single pending invite exists or latest created
+            # Check 5: If single pending invite exists without conflicting email
+            if not matched_invite and len(pending_invites) == 1:
+                single_inv = pending_invites[0]
+                inv_em = str(single_inv["email"] or "").strip().lower()
+                if not inv_em or not target_email or inv_em == target_email:
+                    matched_invite = single_inv
+
             if not matched_invite:
-                matched_invite = pending_invites[0]
+                logger.info("Webhook received but no matching pending invite found.")
+                return {"status": "ignored", "reason": "No matching pending invite found"}
 
             # 4. Assign groups and mark redeemed
             success = await self._assign_groups_and_mark_redeemed(
@@ -494,13 +540,156 @@ class InviteService:
             logger.error(f"Error handling Authentik webhook: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
 
+    async def _repair_misassigned_invites(
+        self,
+        human_users: List[Dict[str, Any]],
+        all_users: List[Dict[str, Any]]
+    ) -> int:
+        """
+        Auto-repairs any tracked invites that were mistakenly claimed by service accounts or bots:
+        1. Revokes the misassigned groups from the service account in Authentik.
+        2. If the intended human user is now registered in Authentik, assigns the groups to them.
+        3. If the human user has not yet registered, resets the invite to 'pending' with redeemed_by=NULL.
+        """
+        db_path = get_db_path()
+        repaired_count = 0
+        try:
+            async with aiosqlite.connect(db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    """
+                    SELECT * FROM tracked_invites 
+                    WHERE status = 'redeemed' 
+                      AND (
+                        redeemed_by LIKE '%service-%' 
+                        OR redeemed_by LIKE '%whatsapp%' 
+                        OR redeemed_by LIKE '%bot%' 
+                        OR redeemed_by LIKE '%ak-%'
+                      )
+                    """
+                ) as cursor:
+                    corrupted_invites = await cursor.fetchall()
+
+            if not corrupted_invites:
+                return 0
+
+            logger.info(f"Auto-repair: Found {len(corrupted_invites)} misassigned invite(s) claimed by service accounts.")
+
+            human_by_email = {str(u.get("email") or "").strip().lower(): u for u in human_users if u.get("email")}
+            human_by_username = {str(u.get("username") or "").strip().lower(): u for u in human_users if u.get("username")}
+
+            for inv in corrupted_invites:
+                inv_id = inv["id"]
+                redeemed_by = inv["redeemed_by"] or ""
+                assigned_groups = json.loads(inv["assigned_groups"] or "[]")
+                inv_email = str(inv["email"] or "").strip().lower()
+                inv_name = str(inv["name"] or "").strip()
+
+                # Extract bot PK from redeemed_by string (e.g. "service-whatsapp-bot (#12)")
+                match = re.search(r'#(\d+)', redeemed_by)
+                bot_pk = int(match.group(1)) if match else None
+                if not bot_pk:
+                    bot_name = redeemed_by.split(" (")[0].strip().lower()
+                    for u in all_users:
+                        if str(u.get("username") or "").strip().lower() == bot_name:
+                            bot_pk = u.get("pk")
+                            break
+
+                # Remove misassigned groups from the service account in Authentik
+                if bot_pk and assigned_groups:
+                    for g_pk in assigned_groups:
+                        try:
+                            await authentik_client.remove_user_from_group(g_pk, bot_pk)
+                            logger.info(f"Auto-repair: Removed group {g_pk} from bot {redeemed_by}")
+                        except Exception as e:
+                            logger.warning(f"Auto-repair: Could not remove group {g_pk} from bot {bot_pk}: {e}")
+
+                # Locate the intended human user in Authentik
+                real_user = None
+                if inv_email and inv_email in human_by_email:
+                    real_user = human_by_email[inv_email]
+                elif inv_email and inv_email in human_by_username:
+                    real_user = human_by_username[inv_email]
+                elif inv_name and len(inv_name) >= 3:
+                    inv_lower = inv_name.lower()
+                    for u in human_users:
+                        u_email = str(u.get("email") or "").strip().lower()
+                        u_user = str(u.get("username") or "").strip().lower()
+                        u_name = str(u.get("name") or "").strip().lower()
+                        if (u_name and inv_lower in u_name) or (u_user and inv_lower in u_user) or (u_email and inv_lower in u_email):
+                            real_user = u
+                            break
+
+                if real_user:
+                    # Intended user is already enrolled! Assign groups to them
+                    real_pk = int(real_user["pk"])
+                    real_username = str(real_user.get("username") or real_user.get("email") or f"User #{real_pk}")
+                    assigned_count = 0
+                    for g_pk in assigned_groups:
+                        try:
+                            await authentik_client.add_user_to_group(g_pk, real_pk)
+                            assigned_count += 1
+                        except Exception as e:
+                            logger.warning(f"Auto-repair: Error assigning group {g_pk} to {real_username}: {e}")
+
+                    async with aiosqlite.connect(db_path) as db:
+                        await db.execute(
+                            "UPDATE tracked_invites SET status = 'redeemed', redeemed_by = ? WHERE id = ?",
+                            (f"{real_username} (#{real_pk})", inv_id)
+                        )
+                        await db.commit()
+
+                    await audit_service.log(
+                        actor="AUTO_REPAIR_WORKER",
+                        action="AUTO_ASSIGN_INVITE_GROUPS",
+                        target_type="USER",
+                        target_name=real_username,
+                        target_id=str(real_pk),
+                        details=f"Auto-repaired invite #{inv_id} ({inv_name}): stripped misassigned groups from {redeemed_by} and assigned {assigned_count}/{len(assigned_groups)} groups to {real_username}",
+                        status="SUCCESS"
+                    )
+                    repaired_count += 1
+                else:
+                    # Intended user has not enrolled yet. Reset invite to 'pending' so they get groups upon signup!
+                    async with aiosqlite.connect(db_path) as db:
+                        await db.execute(
+                            "UPDATE tracked_invites SET status = 'pending', redeemed_by = NULL WHERE id = ?",
+                            (inv_id,)
+                        )
+                        await db.commit()
+
+                    await audit_service.log(
+                        actor="AUTO_REPAIR_WORKER",
+                        action="REPAIR_INVITE",
+                        target_type="INVITATION",
+                        target_name=inv_name,
+                        target_id=str(inv_id),
+                        details=f"Stripped misassigned groups from {redeemed_by} and restored invite #{inv_id} to 'pending' for {inv_email or inv_name}",
+                        status="SUCCESS"
+                    )
+                    repaired_count += 1
+
+        except Exception as e:
+            logger.error(f"Error during _repair_misassigned_invites: {e}", exc_info=True)
+
+        return repaired_count
+
     async def sync_redemptions(self) -> int:
         """
-        Background & real-time sync: Matches newly created users in Authentik against pending invites.
+        Background & real-time sync: Matches newly created human users in Authentik against pending invites.
         Checks Authentik events ('invitation_used', 'login'), target email, active invitation lifecycle,
-        and recent user signups to assign pre-selected groups via Authentik API.
+        and user signups to assign pre-selected groups via Authentik API. Also automatically repairs
+        any past invites mistakenly claimed by service accounts.
         """
         try:
+            # 1. Fetch current users from Authentik and partition human vs system accounts
+            all_users = await authentik_client.get_users()
+            human_users = [u for u in all_users if is_valid_human_user(u)]
+
+            # 2. Run auto-repair on any invites previously hijacked by service accounts
+            await self._repair_misassigned_invites(human_users, all_users)
+
+            # 3. Fetch pending invites from local SQLite
             db_path = get_db_path()
             async with aiosqlite.connect(db_path) as db:
                 db.row_factory = aiosqlite.Row
@@ -510,18 +699,16 @@ class InviteService:
             if not pending:
                 return 0
 
-            # 1. Fetch current users from Authentik
-            users = await authentik_client.get_users()
             users_by_email = {
                 str(u.get("email") or "").strip().lower(): u 
-                for u in users if u.get("email")
+                for u in human_users if u.get("email")
             }
             users_by_username = {
                 str(u.get("username") or "").strip().lower(): u 
-                for u in users if u.get("username")
+                for u in human_users if u.get("username")
             }
 
-            # 2. Fetch active invitations to detect consumed single-use invites
+            # 4. Fetch active invitations to detect consumed single-use invites
             active_inv_pks = set()
             try:
                 active_invs = await authentik_client.get_invitations()
@@ -529,11 +716,11 @@ class InviteService:
             except Exception as e:
                 logger.warning(f"Could not fetch active invitations: {e}")
 
-            # 3. Fetch Authentik events (invitation_used, login)
+            # 5. Fetch Authentik events (invitation_used, login)
             events_inv = await authentik_client.get_events(action="invitation_used", page_size=100)
             events_login = await authentik_client.get_events(action="login", page_size=50)
 
-            # Correlate invitation_used with login events by client_ip
+            # Correlate invitation_used with login events by client_ip (strictly human users only)
             inv_to_user: Dict[str, Dict[str, Any]] = {}
             for ev in events_inv:
                 ev_context = ev.get("context", {})
@@ -545,22 +732,18 @@ class InviteService:
                         ev_ip = ev.get("client_ip")
 
                         ev_user = ev.get("user")
-                        if ev_user and isinstance(ev_user, dict):
-                            u_name = str(ev_user.get("username") or "").lower()
-                            u_pk = ev_user.get("pk")
-                            if u_pk and u_name not in ("anonymoususer", "anonymous", ""):
-                                if ev_inv_pk:
-                                    inv_to_user[ev_inv_pk] = ev_user
-                                if ev_inv_name:
-                                    inv_to_user[ev_inv_name] = ev_user
-                                continue
+                        if ev_user and isinstance(ev_user, dict) and is_valid_human_user(ev_user):
+                            if ev_inv_pk:
+                                inv_to_user[ev_inv_pk] = ev_user
+                            if ev_inv_name:
+                                inv_to_user[ev_inv_name] = ev_user
+                            continue
 
                         if ev_ip:
                             for log_ev in events_login:
                                 log_user = log_ev.get("user")
                                 if log_user and isinstance(log_user, dict) and log_ev.get("client_ip") == ev_ip:
-                                    lu_name = str(log_user.get("username") or "").lower()
-                                    if lu_name not in ("anonymoususer", "anonymous", ""):
+                                    if is_valid_human_user(log_user):
                                         if ev_inv_pk:
                                             inv_to_user[ev_inv_pk] = log_user
                                         if ev_inv_name:
@@ -587,35 +770,45 @@ class InviteService:
 
                 # Strategy 3: Check single-use invitation consumption
                 if not matched_user and invite["single_use"] and inv_pk and inv_pk not in active_inv_pks:
-                    for u in users:
+                    for u in human_users:
                         u_email = str(u.get("email") or "").strip().lower()
                         u_name = str(u.get("name") or "").strip().lower()
                         u_user = str(u.get("username") or "").strip().lower()
                         if target_email and (target_email == u_email or target_email in u_user):
                             matched_user = u
                             break
-                        if inv_name and len(inv_name) >= 3 and (inv_name.lower() in u_name or inv_name.lower() in u_user):
-                            matched_user = u
-                            break
-                    if not matched_user and len(pending) == 1 and users:
-                        matched_user = max(users, key=lambda x: x.get("pk", 0))
+                        if inv_name and len(inv_name) >= 3:
+                            inv_lower = inv_name.lower()
+                            if (u_name and inv_lower in u_name) or (u_user and inv_lower in u_user):
+                                matched_user = u
+                                break
+                    # NOTE: Do NOT use max(users) blind guessing fallback! Leave invite pending if no match.
 
-                # Strategy 4: Check users matching invite name
+                # Strategy 4: Check users matching invite target email or invite recipient name
                 if not matched_user:
-                    for u in users:
+                    for u in human_users:
                         u_email = str(u.get("email") or "").strip().lower()
                         u_name = str(u.get("name") or "").strip().lower()
                         u_user = str(u.get("username") or "").strip().lower()
-                        email_match = bool(target_email and target_email == u_email)
-                        name_match = bool(
-                            inv_name and len(inv_name) >= 3 and
-                            (inv_name.lower() in u_name or inv_name.lower() in u_user or u_name in inv_name.lower())
-                        )
+                        
+                        email_match = bool(target_email and (target_email == u_email or target_email in u_user))
+                        
+                        name_match = False
+                        if inv_name and len(inv_name) >= 3:
+                            inv_lower = inv_name.lower()
+                            if (u_name and (inv_lower in u_name or u_name in inv_lower)) or \
+                               (u_user and (inv_lower in u_user or u_user in inv_lower)):
+                                name_match = True
+                        
+                        # Guard: If invite specifies an email and this user has a different email, do NOT match
+                        if target_email and u_email and target_email != u_email:
+                            continue
+
                         if email_match or name_match:
                             matched_user = u
                             break
 
-                if matched_user:
+                if matched_user and is_valid_human_user(matched_user):
                     ok = await self._assign_groups_and_mark_redeemed(
                         invite=invite,
                         user=matched_user,

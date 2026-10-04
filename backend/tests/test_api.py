@@ -599,6 +599,109 @@ async def test_webhook_endpoints():
         assert clear_res.status_code == 200
         assert clear_res.json()["webhook_secret_configured"] is False
 
+@pytest.mark.asyncio
+async def test_service_account_exclusion_and_repair():
+    from app.services.invite_service import is_valid_human_user, invite_service
+    from app.database import get_db_path
+    import aiosqlite
+    import json
+
+    # 1. Test is_valid_human_user validator
+    assert is_valid_human_user({"pk": 10, "username": "seedwordgame@gmail.com", "email": "seedwordgame@gmail.com", "type": "external"}) is True
+    assert is_valid_human_user({"pk": 11, "username": "service-whatsapp-bot", "type": "service_account"}) is False
+    assert is_valid_human_user({"pk": 12, "username": "akadmin", "type": "internal"}) is False
+    assert is_valid_human_user({"pk": 13, "username": "anonymoususer"}) is False
+    assert is_valid_human_user({"pk": 14, "username": "ak-outpost-core"}) is False
+    assert is_valid_human_user({"pk": 15, "username": "bot-tester"}) is False
+
+    # 2. Add service-whatsapp-bot with the highest PK to Authentik mock users
+    bot_user = {
+        "pk": 9999,
+        "username": "service-whatsapp-bot",
+        "name": "",
+        "email": "",
+        "is_active": True,
+        "type": "service_account",
+        "groups": ["g1111111-1111-1111-1111-111111111111"]
+    }
+    authentik_client.mock_users.append(bot_user)
+
+    # 3. Create a pending invite for a human who hasn't enrolled yet
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        inv_res = await client.post(
+            "/api/invites",
+            json={
+                "name": "Seed Word",
+                "email": "seedwordgame@gmail.com",
+                "expires_in_days": 7,
+                "single_use": True,
+                "group_pks": ["g1111111-1111-1111-1111-111111111111"],
+                "app_names": ["Bar Assistant"]
+            }
+        )
+        assert inv_res.status_code == 200
+        inv_data = inv_res.json()
+        assert inv_data["status"] == "pending"
+
+        # 4. Trigger sync_redemptions() - must NOT match service-whatsapp-bot!
+        redeemed = await invite_service.sync_redemptions()
+        assert redeemed == 0  # seedwordgame@gmail.com is not yet enrolled
+
+        # Verify invite is still pending
+        invites = (await client.get("/api/invites")).json()
+        target_inv = next(i for i in invites if i["email"] == "seedwordgame@gmail.com")
+        assert target_inv["status"] == "pending"
+        assert target_inv["redeemed_by"] is None
+
+        # 5. Simulate the historical corruption bug: an invite marked redeemed by service-whatsapp-bot
+        db_path = get_db_path()
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                "UPDATE tracked_invites SET status = 'redeemed', redeemed_by = 'service-whatsapp-bot (#9999)' WHERE id = ?",
+                (target_inv["id"],)
+            )
+            await db.commit()
+
+        # Group is currently in bot_user's groups
+        assert "g1111111-1111-1111-1111-111111111111" in bot_user["groups"]
+
+        # 6. Run sync_redemptions() -> should trigger auto-repair, strip group from bot, and restore invite to pending!
+        await invite_service.sync_redemptions()
+
+        # Verify group was stripped from service-whatsapp-bot
+        assert "g1111111-1111-1111-1111-111111111111" not in bot_user["groups"]
+
+        # Verify invite was safely restored to 'pending' because seedwordgame is not yet registered
+        invites = (await client.get("/api/invites")).json()
+        repaired_inv = next(i for i in invites if i["id"] == target_inv["id"])
+        assert repaired_inv["status"] == "pending"
+        assert repaired_inv["redeemed_by"] is None
+
+        # 7. Now human user enrolls into Authentik
+        human_user = {
+            "pk": 501,
+            "username": "seedwordgame@gmail.com",
+            "name": "Seed Word",
+            "email": "seedwordgame@gmail.com",
+            "is_active": True,
+            "type": "external",
+            "groups": []
+        }
+        authentik_client.mock_users.append(human_user)
+
+        # 8. Run sync_redemptions() again -> now human user should get the groups assigned!
+        redeemed = await invite_service.sync_redemptions()
+        assert redeemed == 1
+
+        assert "g1111111-1111-1111-1111-111111111111" in human_user["groups"]
+
+        invites = (await client.get("/api/invites")).json()
+        final_inv = next(i for i in invites if i["id"] == target_inv["id"])
+        assert final_inv["status"] == "redeemed"
+        assert "seedwordgame@gmail.com" in final_inv["redeemed_by"]
+
+
 
 
 

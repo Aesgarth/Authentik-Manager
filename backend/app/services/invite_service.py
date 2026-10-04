@@ -362,14 +362,20 @@ class InviteService:
             assigned_groups = json.loads(invite["assigned_groups"])
             db_path = get_db_path()
 
+            logger.info(
+                f"[ASSIGN_GROUPS] Beginning assignment of {len(assigned_groups)} groups to user '{username}' "
+                f"(pk={user_pk}) for invite #{invite['id']} ('{invite['name']}')."
+            )
+
             # Assign groups via Authentik API
             assigned_count = 0
             for g_pk in assigned_groups:
                 try:
                     await authentik_client.add_user_to_group(g_pk, user_pk)
                     assigned_count += 1
+                    logger.info(f"[ASSIGN_GROUPS] Successfully added user {username} (pk={user_pk}) to group {g_pk}")
                 except Exception as e:
-                    logger.warning(f"Error adding user {user_pk} to group {g_pk}: {e}")
+                    logger.warning(f"[ASSIGN_GROUPS] Failed adding user {username} (pk={user_pk}) to group {g_pk}: {e}")
 
             # Mark redeemed in DB (and populate email if it was previously empty)
             target_user_email = user.get("email")
@@ -386,6 +392,9 @@ class InviteService:
                     )
                 await db.commit()
 
+            logger.info(f"[ASSIGN_GROUPS] Marked invite #{invite['id']} as 'redeemed' by {username} (#{user_pk}) in database.")
+
+            audit_status = "SUCCESS" if assigned_count == len(assigned_groups) else ("WARNING" if assigned_count > 0 else "FAILED")
             await audit_service.log(
                 actor=actor,
                 action="AUTO_ASSIGN_INVITE_GROUPS",
@@ -393,7 +402,7 @@ class InviteService:
                 target_name=username,
                 target_id=str(user_pk),
                 details=f"Assigned {assigned_count}/{len(assigned_groups)} groups from invite #{invite['id']} ({invite['name']})",
-                status="SUCCESS"
+                status=audit_status
             )
 
             try:
@@ -450,34 +459,55 @@ class InviteService:
             username_norm = str(username).strip().lower() if username else None
             inv_pk_norm = str(invitation_pk).strip() if invitation_pk else None
 
+            logger.info(
+                f"[WEBHOOK_EVENT] Extracted target identifiers: email='{email_norm}', "
+                f"username='{username_norm}', user_pk='{user_pk}', invitation_pk='{inv_pk_norm}'"
+            )
+
             # 2. Lookup matching user in Authentik with retry to ensure Authentik DB write is finished
             matched_user = None
             for attempt in range(3):
                 all_users = await authentik_client.get_users()
                 human_users = [u for u in all_users if is_valid_human_user(u)]
+                logger.info(
+                    f"[WEBHOOK_EVENT] User lookup attempt {attempt+1}/3: fetched {len(all_users)} total Authentik users "
+                    f"({len(human_users)} human users)."
+                )
                 if user_pk:
                     matched_user = next((u for u in human_users if str(u.get("pk")) == str(user_pk)), None)
+                    if matched_user:
+                        logger.info(f"[WEBHOOK_EVENT] Matched human user by user_pk={user_pk}: '{matched_user.get('username')}'")
                 if not matched_user and email_norm:
                     matched_user = next((u for u in human_users if str(u.get("email") or "").strip().lower() == email_norm), None)
+                    if matched_user:
+                        logger.info(f"[WEBHOOK_EVENT] Matched human user by email='{email_norm}': '{matched_user.get('username')}'")
                 if not matched_user and username_norm:
                     matched_user = next((u for u in human_users if str(u.get("username") or "").strip().lower() == username_norm), None)
+                    if matched_user:
+                        logger.info(f"[WEBHOOK_EVENT] Matched human user by username='{username_norm}': '{matched_user.get('username')}'")
                 if matched_user:
                     break
                 if attempt < 2:
+                    logger.info(f"[WEBHOOK_EVENT] User not found yet on attempt {attempt+1}. Waiting 1.5s for Authentik commit...")
                     await asyncio.sleep(1.5)
 
             if not matched_user:
-                logger.info(f"Webhook received but human user not resolved in Authentik yet (email={email}, user={username}). Triggering sync.")
+                logger.warning(
+                    f"[WEBHOOK_EVENT] Human user could not be resolved in Authentik after 3 attempts "
+                    f"(email='{email_norm}', username='{username_norm}', user_pk='{user_pk}'). Triggering sync_redemptions() fallback."
+                )
                 redeemed = await self.sync_redemptions()
-                return {"status": "pending_sync", "redeemed_count": redeemed}
+                return {"status": "pending_sync", "redeemed_count": redeemed, "reason": "User not resolved in Authentik DB yet"}
 
             if not is_valid_human_user(matched_user):
-                logger.warning(f"Webhook matched non-human user {matched_user.get('username')}. Ignoring.")
-                return {"status": "ignored", "reason": "Target user is not a valid human user"}
+                logger.warning(f"[WEBHOOK_EVENT] Matched non-human user '{matched_user.get('username')}'. Ignoring.")
+                return {"status": "ignored", "reason": f"Matched user '{matched_user.get('username')}' is a service/system account"}
 
             target_pk = matched_user.get("pk")
             target_username = str(matched_user.get("username") or matched_user.get("email") or f"User #{target_pk}")
             target_email = str(matched_user.get("email") or "").strip().lower()
+
+            logger.info(f"[WEBHOOK_EVENT] Resolved human user: username='{target_username}', pk={target_pk}, email='{target_email}'")
 
             # 3. Find pending invite in tracked_invites
             db_path = get_db_path()
@@ -487,32 +517,44 @@ class InviteService:
                     pending_invites = await cursor.fetchall()
 
             if not pending_invites:
-                logger.info("No pending invites to fulfill for webhook.")
+                logger.info(f"[WEBHOOK_EVENT] No pending invites in database to fulfill for user {target_username}.")
                 return {"status": "ignored", "reason": "No pending invites in database"}
 
+            logger.info(f"[WEBHOOK_EVENT] Evaluating {len(pending_invites)} pending invite(s) for user '{target_username}'...")
+
             matched_invite = None
+            match_reason = ""
+
             # Check 1: Invitation PK
             if inv_pk_norm:
                 matched_invite = next((i for i in pending_invites if str(i["invitation_pk"] or "") == inv_pk_norm), None)
+                if matched_invite:
+                    match_reason = f"Check 1: Exact invitation_pk match ({inv_pk_norm})"
+                    logger.info(f"[WEBHOOK_EVENT] -> {match_reason} -> matched invite #{matched_invite['id']} ('{matched_invite['name']}')")
 
             # Check 2: Target Email
             if not matched_invite and target_email:
                 matched_invite = next((i for i in pending_invites if str(i["email"] or "").strip().lower() == target_email), None)
+                if matched_invite:
+                    match_reason = f"Check 2: Target email match ({target_email})"
+                    logger.info(f"[WEBHOOK_EVENT] -> {match_reason} -> matched invite #{matched_invite['id']} ('{matched_invite['name']}')")
 
             # Check 3: Check consumed single-use invites from Authentik
             if not matched_invite:
                 try:
                     active_invs = await authentik_client.get_invitations()
                     active_pks = {str(a.get("pk")) for a in active_invs}
+                    logger.info(f"[WEBHOOK_EVENT] Check 3: Active Authentik invitation PKs count: {len(active_pks)}")
                     for i in pending_invites:
                         if i["single_use"] and str(i["invitation_pk"]) not in active_pks:
-                            # Verify email does not conflict
                             i_email = str(i["email"] or "").strip().lower()
                             if not i_email or not target_email or i_email == target_email:
                                 matched_invite = i
+                                match_reason = f"Check 3: Consumed single-use invite #{i['id']} ({i['invitation_pk']})"
+                                logger.info(f"[WEBHOOK_EVENT] -> {match_reason}")
                                 break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[WEBHOOK_EVENT] Check 3: Failed fetching active invitations: {e}")
 
             # Check 4: Name match
             if not matched_invite:
@@ -524,6 +566,8 @@ class InviteService:
                     if inv_name and len(inv_name) >= 3:
                         if (target_username and inv_name in target_username.lower()) or (target_email and inv_name in target_email):
                             matched_invite = i
+                            match_reason = f"Check 4: Recipient name substring match ('{inv_name}')"
+                            logger.info(f"[WEBHOOK_EVENT] -> {match_reason} -> matched invite #{i['id']}")
                             break
 
             # Check 5: If single pending invite exists without conflicting email
@@ -532,12 +576,22 @@ class InviteService:
                 inv_em = str(single_inv["email"] or "").strip().lower()
                 if not inv_em or not target_email or inv_em == target_email:
                     matched_invite = single_inv
+                    match_reason = f"Check 5: Single pending invite fallback (#{single_inv['id']})"
+                    logger.info(f"[WEBHOOK_EVENT] -> {match_reason}")
 
             if not matched_invite:
-                logger.info("Webhook received but no matching pending invite found.")
-                return {"status": "ignored", "reason": "No matching pending invite found"}
+                pending_ids = [dict(i)["id"] for i in pending_invites]
+                logger.warning(
+                    f"[WEBHOOK_EVENT] Webhook received but no pending invite matched user '{target_username}' "
+                    f"(email: '{target_email}', inv_pk: '{inv_pk_norm}'). Pending invite IDs: {pending_ids}"
+                )
+                return {
+                    "status": "ignored",
+                    "reason": f"No pending invite matched user '{target_username}' (email: '{target_email}', inv_pk: '{inv_pk_norm}')"
+                }
 
             # 4. Assign groups and mark redeemed
+            logger.info(f"[WEBHOOK_EVENT] Assigning groups for matched invite #{matched_invite['id']} ({match_reason})")
             success = await self._assign_groups_and_mark_redeemed(
                 invite=matched_invite,
                 user=matched_user,
@@ -550,7 +604,8 @@ class InviteService:
                 "user": target_username,
                 "user_pk": target_pk,
                 "invite_id": matched_invite["id"],
-                "assigned_groups_count": len(assigned_groups)
+                "assigned_groups_count": len(assigned_groups),
+                "match_reason": match_reason
             }
         except Exception as e:
             logger.error(f"Error handling Authentik webhook: {e}", exc_info=True)
@@ -773,13 +828,23 @@ class InviteService:
                                     break
 
             redeemed_count = 0
+            logger.info(
+                f"[SYNC_REDEMPTIONS] Evaluating {len(pending)} pending invite(s). "
+                f"Authentik human users available: {len(human_users)}"
+            )
 
             for invite in pending:
                 matched_user = None
+                matched_strategy = ""
                 inv_pk = str(invite["invitation_pk"] or "")
                 inv_name = str(invite["name"] or "")
                 target_email = str(invite["email"] or "").strip().lower()
                 target_phone = str(invite["phone"] or "").strip()
+
+                logger.debug(
+                    f"[SYNC_REDEMPTIONS] Evaluating invite #{invite['id']} ('{inv_name}', email='{target_email}', "
+                    f"phone='{target_phone}', single_use={bool(invite['single_use'])})"
+                )
 
                 # Strategy 0: Direct Match via User Attributes (invitation_pk, invitation_slug, or phone)
                 for u in human_users:
@@ -792,27 +857,34 @@ class InviteService:
 
                     if u_inv_pk and u_inv_pk == inv_pk:
                         matched_user = u
+                        matched_strategy = f"Strategy 0 (user attribute invitation_pk={u_inv_pk})"
                         break
                     if u_inv_slug and inv_name and u_inv_slug == inv_name.lower():
                         matched_user = u
+                        matched_strategy = f"Strategy 0 (user attribute invitation_slug={u_inv_slug})"
                         break
                     if target_phone and u_phone and (target_phone == u_phone or target_phone in u_phone or u_phone in target_phone):
                         matched_user = u
+                        matched_strategy = f"Strategy 0 (user attribute phone={u_phone})"
                         break
 
                 # Strategy 1: Check Authentik invitation_used event correlation
                 if not matched_user:
                     if inv_pk and inv_pk in inv_to_user:
                         matched_user = inv_to_user[inv_pk]
+                        matched_strategy = f"Strategy 1 (event correlation inv_pk={inv_pk})"
                     elif inv_name and inv_name in inv_to_user:
                         matched_user = inv_to_user[inv_name]
+                        matched_strategy = f"Strategy 1 (event correlation inv_name={inv_name})"
 
                 # Strategy 2: Match by target email if provided (check both email and username)
                 if not matched_user and target_email:
                     if target_email in users_by_email:
                         matched_user = users_by_email[target_email]
+                        matched_strategy = f"Strategy 2 (email match={target_email})"
                     elif target_email in users_by_username:
                         matched_user = users_by_username[target_email]
+                        matched_strategy = f"Strategy 2 (username match={target_email})"
 
                 # Strategy 3: Check single-use invitation consumption
                 if not matched_user and invite["single_use"] and inv_pk and inv_pk not in active_inv_pks:
@@ -825,16 +897,18 @@ class InviteService:
 
                         if target_email and (target_email == u_email or target_email in u_user):
                             matched_user = u
+                            matched_strategy = "Strategy 3 (consumed single-use + email/user match)"
                             break
                         if target_phone and u_phone and (target_phone == u_phone or target_phone in u_phone or u_phone in target_phone):
                             matched_user = u
+                            matched_strategy = "Strategy 3 (consumed single-use + phone match)"
                             break
                         if inv_name and len(inv_name) >= 3:
                             inv_lower = inv_name.lower()
                             if (u_name and inv_lower in u_name) or (u_user and inv_lower in u_user):
                                 matched_user = u
+                                matched_strategy = "Strategy 3 (consumed single-use + name match)"
                                 break
-                    # NOTE: Do NOT use max(users) blind guessing fallback! Leave invite pending if no match.
 
                 # Strategy 4: Check users matching invite target email or invite recipient name
                 if not matched_user:
@@ -858,9 +932,14 @@ class InviteService:
 
                         if email_match or name_match:
                             matched_user = u
+                            matched_strategy = f"Strategy 4 (name/email match: email={email_match}, name={name_match})"
                             break
 
                 if matched_user and is_valid_human_user(matched_user):
+                    logger.info(
+                        f"[SYNC_REDEMPTIONS] Matched pending invite #{invite['id']} ('{inv_name}') "
+                        f"to user '{matched_user.get('username')}' (pk={matched_user.get('pk')}) via {matched_strategy}"
+                    )
                     ok = await self._assign_groups_and_mark_redeemed(
                         invite=invite,
                         user=matched_user,
@@ -868,6 +947,11 @@ class InviteService:
                     )
                     if ok:
                         redeemed_count += 1
+                else:
+                    logger.debug(
+                        f"[SYNC_REDEMPTIONS] Pending invite #{invite['id']} ('{inv_name}', email='{target_email}', "
+                        f"pk='{inv_pk}') could not be matched to any user yet."
+                    )
 
             return redeemed_count
         except Exception as e:
@@ -980,10 +1064,12 @@ try:
         "username": email,
         "invitation_pk": inv_pk
     }}).encode("utf-8")
+    ak_logger.info(f"Notifying Authentik Manager for user '{{email}}' (invite '{{inv_pk}}') at {{mgr_url}}")
     req = urllib.request.Request(mgr_url, data=payload, headers={{"Content-Type": "application/json"}})
-    urllib.request.urlopen(req, timeout=2)
-except Exception:
-    pass
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        ak_logger.info(f"Authentik Manager webhook response status: {{resp.status}}")
+except Exception as err:
+    ak_logger.error(f"Failed to notify Authentik Manager webhook: {{err}}")
 '''
 
         return {

@@ -1,10 +1,13 @@
 import uuid
 import re
 import secrets
+import logging
 import httpx
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from app.config import settings
+
+logger = logging.getLogger("authentik_manager.authentik_client")
 
 class AuthentikClient:
     def __init__(self):
@@ -56,25 +59,32 @@ class AuthentikClient:
                 )
 
         url = f"{self.base_url}{endpoint}"
+        logger.debug(f"Authentik API Request: {method} {url}")
         try:
             async with httpx.AsyncClient(verify=self.verify_ssl, timeout=15.0) as client:
                 response = await client.request(
                     method, url, headers=self._get_headers(), **kwargs
                 )
+                logger.debug(f"Authentik API Response: {method} {url} -> Status {response.status_code}")
                 response.raise_for_status()
                 if response.status_code == 204:
                     return None
                 return response.json()
         except httpx.HTTPStatusError as e:
+            logger.error(f"Authentik API HTTP error ({e.response.status_code}) on {method} {url}: {e.response.text[:500]}")
             if e.response.status_code in (401, 403):
                 raise RuntimeError(
                     f"Authentik API token rejected (HTTP {e.response.status_code}). Verify your token in .env and ensure the service account has admin permissions."
                 )
             raise RuntimeError(f"Authentik API error ({e.response.status_code}): {e.response.text[:200]}")
-        except httpx.ConnectError:
+        except httpx.ConnectError as e:
+            logger.error(f"Authentik API ConnectError on {method} {url}: {e}")
             raise RuntimeError(
                 f"Failed to connect to Authentik at '{self.base_url}'. Check your AUTHENTIK_URL in .env and verify the host is reachable."
             )
+        except Exception as e:
+            logger.error(f"Authentik API unexpected error on {method} {url}: {e}", exc_info=True)
+            raise
 
     async def _get_all_paginated(self, endpoint: str, params: Optional[Dict] = None) -> List[Dict[str, Any]]:
         """Handles Authentik pagination to retrieve all items."""

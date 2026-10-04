@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     SECRET_KEY: str = "changeme-in-production-use-a-strong-secret-key-32chars"
     SQLITE_DB_PATH: str = "data/manager.db"
+    LOG_LEVEL: str = "INFO"
 
     # Authentik Connection
     AUTHENTIK_URL: str = "https://authentik.company"

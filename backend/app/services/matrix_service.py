@@ -164,16 +164,31 @@ class MatrixService:
                 else:
                     group_pks.append(str(g or ""))
 
+            u_attrs = u.get("attributes") or {}
+            if not isinstance(u_attrs, dict):
+                u_attrs = {}
+
+            u_phone = (
+                u_attrs.get("phone")
+                or u_attrs.get("phone_number")
+                or u_attrs.get("phoneNumber")
+                or None
+            )
+            if u_phone:
+                u_phone = str(u_phone).strip()
+
             user_schemas.append(UserSchema(
                 pk=u["pk"],
                 username=str(u.get("username") or ""),
                 name=str(u.get("name") or u.get("username") or ""),
                 email=str(u.get("email") or ""),
+                phone=u_phone,
                 is_active=bool(u.get("is_active", True)),
                 is_superuser=bool(u.get("is_superuser", False)),
                 groups=group_pks,
                 avatar=u.get("avatar"),
                 last_login=u.get("last_login"),
+                attributes=u_attrs,
             ))
 
         # Compute permissions matrices:

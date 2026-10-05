@@ -3,11 +3,13 @@ export interface User {
   username: string;
   name: string;
   email: string;
+  phone?: string;
   is_active: boolean;
   is_superuser: boolean;
   groups: string[];
   avatar?: string;
   last_login?: string;
+  attributes?: Record<string, any>;
 }
 
 export interface BoundGroupRef {

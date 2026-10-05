@@ -78,4 +78,9 @@ async def detect_url(request: Request, current_user: dict = Depends(get_current_
         "redirect_uri": f"{(saved or detected)}/api/auth/oidc/callback"
     }
 
+@router.post("/ensure-phone-scope")
+async def ensure_phone_scope(current_user: dict = Depends(get_current_user)):
+    from app.authentik_client import authentik_client
+    return await authentik_client.ensure_phone_scope_mapping()
+
 

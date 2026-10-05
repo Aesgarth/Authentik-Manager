@@ -702,6 +702,36 @@ async def test_service_account_exclusion_and_repair():
         assert final_inv["status"] == "redeemed"
         assert "seedwordgame@gmail.com" in final_inv["redeemed_by"]
 
+@pytest.mark.asyncio
+async def test_user_phone_sync_and_update():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Test PATCH /api/users/{user_pk}/phone with valid user
+        phone_res = await client.patch(
+            "/api/users/2/phone",
+            json={"phone": "+447111222333"}
+        )
+        assert phone_res.status_code == 200
+        assert phone_res.json()["phone"] == "+447111222333"
+
+        # Verify in matrix
+        matrix_res = (await client.get("/api/matrix")).json()
+        target_user = next((u for u in matrix_res["users"] if u["pk"] == 2), None)
+        assert target_user is not None
+        assert target_user["phone"] == "+447111222333"
+
+        # Test non-existent user returns 404
+        not_found_res = await client.patch(
+            "/api/users/99999/phone",
+            json={"phone": "+447111222333"}
+        )
+        assert not_found_res.status_code == 404
+
+        # 2. Test ensure-phone-scope
+        scope_res = await client.post("/api/settings/ensure-phone-scope")
+        assert scope_res.status_code == 200
+        assert scope_res.json()["status"] in ("created", "exists")
+
 
 
 

@@ -8,11 +8,16 @@ class UserSchema(BaseModel):
     username: str
     name: str = ""
     email: Optional[str] = ""
+    phone: Optional[str] = None
     is_active: bool = True
     is_superuser: bool = False
     groups: List[str] = [] # List of Group UUIDs
     avatar: Optional[str] = None
     last_login: Optional[str] = None
+    attributes: Dict[str, Any] = Field(default_factory=dict)
+
+class UpdateUserPhoneRequest(BaseModel):
+    phone: Optional[str] = None
 
 class GroupSchema(BaseModel):
     pk: str # UUID

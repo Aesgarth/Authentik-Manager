@@ -15,7 +15,9 @@ import {
   ExternalLink,
   Grid,
   Layers,
-  Download
+  Download,
+  Smartphone,
+  Plus
 } from 'lucide-react';
 import { AccessMatrixData, User, Application, StagedChange, ExpiringGrant } from '../types';
 import { api } from '../api/client';
@@ -63,6 +65,11 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
   const [provisioningAll, setProvisioningAll] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
   const [popover, setPopover] = useState<ActivePopover | null>(null);
+
+  // Phone editing modal state
+  const [phoneModalUser, setPhoneModalUser] = useState<User | null>(null);
+  const [phoneInputValue, setPhoneInputValue] = useState('');
+  const [savingPhone, setSavingPhone] = useState(false);
 
   // Popover Temporary Access Lease state
   const [isTemporary, setIsTemporary] = useState(false);
@@ -147,7 +154,8 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
       const matchesSearch =
         u.username.toLowerCase().includes(q) ||
         u.name.toLowerCase().includes(q) ||
-        (u.email && u.email.toLowerCase().includes(q));
+        (u.email && u.email.toLowerCase().includes(q)) ||
+        (u.phone && u.phone.toLowerCase().includes(q));
 
       if (userFilter === 'admin' && !u.is_superuser) return false;
       if (userFilter === 'active' && !u.is_active) return false;
@@ -530,6 +538,37 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
                             </div>
                             <div className="text-[10px] text-slate-500 truncate max-w-[140px]">
                               @{user.username}
+                            </div>
+                            <div className="flex items-center space-x-1.5 mt-0.5">
+                              {user.phone ? (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setPhoneModalUser(user);
+                                    setPhoneInputValue(user.phone || '');
+                                  }}
+                                  title="Click to edit user phone number"
+                                  className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-[#162334] hover:bg-[#1e2f47] text-slate-300 border border-[#253952] text-[10px] transition-colors"
+                                >
+                                  <Smartphone className="h-2.5 w-2.5 text-emerald-400 shrink-0" />
+                                  <span className="font-mono text-emerald-300/90 text-[10px]">{user.phone}</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setPhoneModalUser(user);
+                                    setPhoneInputValue('');
+                                  }}
+                                  title="Add phone number"
+                                  className="opacity-0 group-hover:opacity-100 text-[10px] text-slate-500 hover:text-slate-300 transition-opacity inline-flex items-center space-x-0.5 hover:underline"
+                                >
+                                  <Plus className="h-2.5 w-2.5" />
+                                  <span>Phone</span>
+                                </button>
+                              )}
                             </div>
                           </div>
 
@@ -1133,6 +1172,103 @@ export const AccessMatrix: React.FC<AccessMatrixProps> = ({
             </div>
           )}
 
+        </div>
+      )}
+
+      {/* Edit User Phone Modal */}
+      {phoneModalUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-[#16202e] border border-[#2c3f58] rounded-xl shadow-2xl p-5 text-slate-200">
+            <div className="flex items-start justify-between pb-3 mb-3 border-b border-[#25354b]">
+              <div className="flex items-center space-x-2">
+                <div className="p-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">
+                  <Smartphone className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">Edit Phone Number</h3>
+                  <p className="text-[11px] text-slate-400">for {phoneModalUser.name || phoneModalUser.username}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPhoneModalUser(null)}
+                className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-[#1e2c3f] transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Mobile Phone (International format)
+                </label>
+                <input
+                  type="tel"
+                  placeholder="+447000000000"
+                  value={phoneInputValue}
+                  onChange={(e) => setPhoneInputValue(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#0b0f17] border border-[#25354b] rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Synchronized with Authentik user profile and WhatsApp notifications.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
+                {phoneModalUser.phone ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setSavingPhone(true);
+                      try {
+                        await api.updateUserPhone(phoneModalUser.pk, '');
+                        phoneModalUser.phone = undefined;
+                        setPhoneModalUser(null);
+                      } catch (err: any) {
+                        alert(err.message || 'Failed to clear phone number');
+                      } finally {
+                        setSavingPhone(false);
+                      }
+                    }}
+                    disabled={savingPhone}
+                    className="text-xs text-rose-400 hover:text-rose-300 hover:underline"
+                  >
+                    Clear Phone
+                  </button>
+                ) : <div />}
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setPhoneModalUser(null)}
+                    disabled={savingPhone}
+                    className="px-3 py-1.5 rounded-lg border border-[#25354b] text-slate-300 hover:bg-[#1e2c3f] text-xs font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setSavingPhone(true);
+                      try {
+                        const res = await api.updateUserPhone(phoneModalUser.pk, phoneInputValue.trim());
+                        phoneModalUser.phone = res.phone || undefined;
+                        setPhoneModalUser(null);
+                      } catch (err: any) {
+                        alert(err.message || 'Failed to save phone number');
+                      } finally {
+                        setSavingPhone(false);
+                      }
+                    }}
+                    disabled={savingPhone}
+                    className="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-50"
+                  >
+                    {savingPhone ? 'Saving...' : 'Save Phone'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

@@ -396,6 +396,23 @@ class InviteService:
                     )
                 await db.commit()
 
+            # Sync phone number from invite to user attributes in Authentik if present
+            invite_phone = str(invite["phone"] or "").strip()
+            if invite_phone:
+                try:
+                    logger.info(f"[ASSIGN_GROUPS] Syncing invite phone '{invite_phone}' to user '{username}' (pk={user_pk}) in Authentik...")
+                    await authentik_client.update_user_attributes(
+                        user_pk=user_pk,
+                        attributes={
+                            "phone": invite_phone,
+                            "phone_number": invite_phone,
+                            "phoneNumber": invite_phone
+                        }
+                    )
+                    logger.info(f"[ASSIGN_GROUPS] Successfully synced phone to user {username} (pk={user_pk})")
+                except Exception as e:
+                    logger.warning(f"[ASSIGN_GROUPS] Failed syncing phone to user {user_pk} attributes: {e}")
+
             logger.info(f"[ASSIGN_GROUPS] Marked invite #{invite['id']} as 'redeemed' by {username} (#{user_pk}) in database.")
 
             audit_status = "SUCCESS" if assigned_count == len(assigned_groups) else ("WARNING" if assigned_count > 0 else "FAILED")
@@ -764,8 +781,46 @@ class InviteService:
             # 2. Run auto-repair on any invites previously hijacked by service accounts
             await self._repair_misassigned_invites(human_users, all_users)
 
-            # 3. Fetch pending invites from local SQLite
+            # 3. Retroactively sync phone numbers from past redeemed invites into Authentik user attributes
             db_path = get_db_path()
+            try:
+                async with aiosqlite.connect(db_path) as db:
+                    db.row_factory = aiosqlite.Row
+                    async with db.execute(
+                        "SELECT id, phone, redeemed_by FROM tracked_invites WHERE status = 'redeemed' AND phone IS NOT NULL AND phone != ''"
+                    ) as cursor:
+                        past_redeemed = await cursor.fetchall()
+
+                for r_inv in past_redeemed:
+                    r_phone = str(r_inv["phone"] or "").strip()
+                    r_by = str(r_inv["redeemed_by"] or "")
+                    pk_match = re.search(r'#(\d+)', r_by)
+                    if pk_match and r_phone:
+                        target_pk = int(pk_match.group(1))
+                        target_user = next((u for u in all_users if u.get("pk") == target_pk), None)
+                        if target_user:
+                            t_attrs = target_user.get("attributes") or {}
+                            if not isinstance(t_attrs, dict):
+                                t_attrs = {}
+                            if not t_attrs.get("phone"):
+                                logger.info(f"[SYNC_REDEMPTIONS] Retroactively syncing phone '{r_phone}' from invite #{r_inv['id']} to user #{target_pk} in Authentik...")
+                                try:
+                                    await authentik_client.update_user_attributes(
+                                        target_pk,
+                                        {
+                                            "phone": r_phone,
+                                            "phone_number": r_phone,
+                                            "phoneNumber": r_phone
+                                        }
+                                    )
+                                    t_attrs["phone"] = r_phone
+                                    target_user["attributes"] = t_attrs
+                                except Exception as e:
+                                    logger.warning(f"Failed retroactive phone sync for user {target_pk}: {e}")
+            except Exception as e:
+                logger.warning(f"Error during retroactive phone sync: {e}")
+
+            # 4. Fetch pending invites from local SQLite
             async with aiosqlite.connect(db_path) as db:
                 db.row_factory = aiosqlite.Row
                 async with db.execute("SELECT * FROM tracked_invites WHERE status = 'pending' ORDER BY id DESC") as cursor:

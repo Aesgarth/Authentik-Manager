@@ -146,6 +146,42 @@ class AuthentikClient:
             return self.mock_users
         return await self._get_all_paginated("/api/v3/core/users/")
 
+    async def get_user(self, user_pk: int) -> Optional[Dict[str, Any]]:
+        if self.demo_mode:
+            return next((u for u in self.mock_users if u["pk"] == user_pk), None)
+        try:
+            return await self._request("GET", f"/api/v3/core/users/{user_pk}/")
+        except Exception as e:
+            logger.warning(f"Error fetching user {user_pk} from Authentik: {e}")
+            return None
+
+    async def update_user_attributes(self, user_pk: int, attributes: Dict[str, Any]) -> bool:
+        """
+        Merges provided attributes into the user's existing Authentik attributes.
+        """
+        if self.demo_mode:
+            user = next((u for u in self.mock_users if u["pk"] == user_pk), None)
+            if user:
+                user.setdefault("attributes", {}).update(attributes)
+                return True
+            return False
+
+        try:
+            current_user = await self.get_user(user_pk)
+            existing_attrs = current_user.get("attributes", {}) if current_user else {}
+            if not isinstance(existing_attrs, dict):
+                existing_attrs = {}
+            merged_attrs = {**existing_attrs, **attributes}
+            await self._request(
+                "PATCH",
+                f"/api/v3/core/users/{user_pk}/",
+                json={"attributes": merged_attrs}
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating attributes for user {user_pk}: {e}")
+            raise
+
     async def get_policy_bindings(self, target_pk: Optional[str] = None) -> List[Dict[str, Any]]:
         if self.demo_mode:
             if target_pk:
@@ -414,6 +450,63 @@ class AuthentikClient:
         if self.demo_mode:
             return self.mock_scope_mappings
         return await self._get_all_paginated("/api/v3/propertymappings/provider/scope/")
+
+    async def create_scope_mapping(
+        self,
+        name: str,
+        scope_name: str,
+        expression: str,
+        description: str = ""
+    ) -> Dict[str, Any]:
+        if self.demo_mode:
+            new_mapping = {
+                "pk": f"scope-{scope_name}-{uuid.uuid4().hex[:6]}",
+                "name": name,
+                "scope_name": scope_name,
+                "expression": expression,
+                "description": description
+            }
+            self.mock_scope_mappings.append(new_mapping)
+            return new_mapping
+
+        payload = {
+            "name": name,
+            "scope_name": scope_name,
+            "expression": expression,
+            "description": description
+        }
+        return await self._request("POST", "/api/v3/propertymappings/provider/scope/", json=payload)
+
+    async def ensure_phone_scope_mapping(self) -> Dict[str, Any]:
+        """
+        Checks if an OpenID 'phone' scope mapping exists in Authentik; creates one if missing.
+        """
+        mappings = await self.get_scope_mappings()
+        existing = next(
+            (m for m in mappings if str(m.get("scope_name") or "").strip().lower() == "phone"),
+            None
+        )
+        if existing:
+            return {"status": "exists", "mapping": existing}
+
+        name = "authentik default OAuth Mapping: OpenID 'phone'"
+        scope_name = "phone"
+        description = "Maps user phone attribute to standard OpenID phone_number claim"
+        expression = (
+            "# Return standard OpenID Connect phone claims from user attributes\n"
+            "phone = request.user.attributes.get('phone') or request.user.attributes.get('phone_number') or request.user.attributes.get('phoneNumber') or ''\n"
+            "return {\n"
+            "    'phone_number': phone,\n"
+            "    'phone_number_verified': bool(phone),\n"
+            "}\n"
+        )
+        created = await self.create_scope_mapping(
+            name=name,
+            scope_name=scope_name,
+            expression=expression,
+            description=description
+        )
+        return {"status": "created", "mapping": created}
 
     async def get_oauth2_providers(self, search: Optional[str] = None) -> List[Dict[str, Any]]:
         if self.demo_mode:

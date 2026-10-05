@@ -374,4 +374,26 @@ export const api = {
     window.URL.revokeObjectURL(url);
     document.body.removeChild(a);
   },
+
+  async updateUserPhone(user_pk: number, phone: string): Promise<{ user_pk: number; phone: string }> {
+    const res = await fetch(`${API_BASE}/users/${user_pk}/phone`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to update phone number' }));
+      throw new Error(err.detail || 'Failed to update phone number');
+    }
+    return res.json();
+  },
+
+  async ensurePhoneScope(): Promise<{ status: string; mapping: any }> {
+    const res = await fetch(`${API_BASE}/settings/ensure-phone-scope`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) throw new Error('Failed to ensure phone scope mapping in Authentik');
+    return res.json();
+  },
 };

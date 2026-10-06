@@ -94,6 +94,13 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     loadData();
+    // Catch OIDC callback error redirect parameters
+    const params = new URLSearchParams(window.location.search);
+    const oidcErr = params.get('oidc_error') || params.get('error');
+    if (oidcErr) {
+      showToast(oidcErr, 'error');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   }, [loadData]);
 
   // Periodic poll for WhatsApp status when modal is open

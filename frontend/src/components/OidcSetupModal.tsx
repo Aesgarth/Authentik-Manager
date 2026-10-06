@@ -80,10 +80,21 @@ export const OidcSetupModal: React.FC<OidcSetupModalProps> = ({
       return;
     }
 
+    const now = () => new Date().toLocaleTimeString();
+    const initialLogs = [
+      `[${now()}] Initiating 1-Click OIDC configuration...`,
+      `[${now()}] Target Application URL: ${appUrl}`,
+      `[${now()}] Callback Redirect URI: ${redirectUri}`,
+      `[${now()}] Application Name: "${appName}" (Slug: "${appSlug}")`,
+      `[${now()}] RBAC Access Group: "${adminGroupName}"`,
+      `[${now()}] Immediate Activation: ${activateImmediately}`,
+      `[${now()}] Submitting request to backend (/api/settings/auto-setup-oidc)...`,
+    ];
+
     setLoading(true);
     setError(null);
-    setLogs([]);
-    setShowLogs(false);
+    setLogs(initialLogs);
+    setShowLogs(true);
     try {
       const res = await api.autoSetupOidc({
         app_url: appUrl,
@@ -95,16 +106,31 @@ export const OidcSetupModal: React.FC<OidcSetupModalProps> = ({
       setResult(res);
       if (res.logs && res.logs.length > 0) {
         setLogs(res.logs);
+      } else {
+        setLogs([
+          ...initialLogs,
+          `[${now()}] ✅ OIDC setup successfully completed in Authentik!`,
+          `[${now()}] Client ID: ${res.client_id}`,
+          `[${now()}] Issuer URL: ${res.issuer_url}`,
+          `[${now()}] Provider PK: ${res.provider_pk}`,
+        ]);
       }
       onShowToast('Authentik OIDC / SSO configured successfully!', 'success');
       if (onSuccess) onSuccess();
     } catch (err: any) {
       const errMsg = err.message || 'Failed to automate OIDC setup in Authentik';
       setError(errMsg);
+      const failureLogs = [...initialLogs, `[${now()}] ❌ Setup request failed: ${errMsg}`];
       if (err.logs && err.logs.length > 0) {
-        setLogs(err.logs);
-        setShowLogs(true);
+        failureLogs.push(`[${now()}] --- Backend Execution Trace ---`);
+        failureLogs.push(...err.logs);
+      } else {
+        failureLogs.push(`[${now()}] ℹ️ No backend trace array returned.`);
+        failureLogs.push(`[${now()}] 💡 Reminder: If running via Docker, make sure you rebuilt the container with:`);
+        failureLogs.push(`      docker compose up -d --build`);
       }
+      setLogs(failureLogs);
+      setShowLogs(true);
       onShowToast(errMsg, 'error');
     } finally {
       setLoading(false);

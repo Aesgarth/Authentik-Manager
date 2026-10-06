@@ -327,6 +327,7 @@ class AutoSetupOidcResponse(BaseModel):
     bound_group_pk: Optional[str] = None
     auth_method: str
     steps_completed: List[str] = []
+    logs: List[str] = []
 
 class TestConnectionRequest(BaseModel):
     url: Optional[str] = None

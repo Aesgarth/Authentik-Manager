@@ -59,24 +59,30 @@ class AuthentikClient:
                 )
 
         url = f"{self.base_url}{endpoint}"
-        logger.debug(f"Authentik API Request: {method} {url}")
+        if method.upper() in ("POST", "PATCH", "PUT", "DELETE"):
+            logger.info(f"Authentik API Request: {method} {url}")
+        else:
+            logger.debug(f"Authentik API Request: {method} {url}")
         try:
             async with httpx.AsyncClient(verify=self.verify_ssl, timeout=15.0) as client:
                 response = await client.request(
                     method, url, headers=self._get_headers(), **kwargs
                 )
-                logger.debug(f"Authentik API Response: {method} {url} -> Status {response.status_code}")
+                if response.status_code >= 400:
+                    logger.error(f"Authentik API HTTP error ({response.status_code}) on {method} {url}: {response.text}")
+                else:
+                    logger.debug(f"Authentik API Response: {method} {url} -> Status {response.status_code}")
                 response.raise_for_status()
                 if response.status_code == 204:
                     return None
                 return response.json()
         except httpx.HTTPStatusError as e:
-            logger.error(f"Authentik API HTTP error ({e.response.status_code}) on {method} {url}: {e.response.text[:500]}")
+            logger.error(f"Authentik API HTTP error ({e.response.status_code}) on {method} {url}: {e.response.text}")
             if e.response.status_code in (401, 403):
                 raise RuntimeError(
                     f"Authentik API token rejected (HTTP {e.response.status_code}). Verify your token in .env and ensure the service account has admin permissions."
                 )
-            raise RuntimeError(f"Authentik API error ({e.response.status_code}): {e.response.text[:200]}")
+            raise RuntimeError(f"Authentik API error ({e.response.status_code}): {e.response.text}")
         except httpx.ConnectError as e:
             logger.error(f"Authentik API ConnectError on {method} {url}: {e}")
             raise RuntimeError(
@@ -577,13 +583,19 @@ class AuthentikClient:
         if invalidation_flow:
             payload["invalidation_flow"] = invalidation_flow
 
+        logger.info(f"Creating OAuth2 Provider '{name}' (client_id='{client_id}', redirect_uris={formatted_strings})")
         try:
-            return await self._request("POST", "/api/v3/providers/oauth2/", json=payload)
+            res = await self._request("POST", "/api/v3/providers/oauth2/", json=payload)
+            logger.info(f"Successfully created OAuth2 Provider '{name}' (pk={res.get('pk')})")
+            return res
         except RuntimeError as e:
             # Fallback to string array if Authentik instance expects list of strings
             if "redirect_uris" in str(e).lower() and ("dictionary" in str(e).lower() or "string" in str(e).lower()):
+                logger.warning("Retrying OAuth2 Provider creation with flat string redirect_uris fallback...")
                 payload["redirect_uris"] = formatted_strings
-                return await self._request("POST", "/api/v3/providers/oauth2/", json=payload)
+                res = await self._request("POST", "/api/v3/providers/oauth2/", json=payload)
+                logger.info(f"Successfully created OAuth2 Provider '{name}' via fallback (pk={res.get('pk')})")
+                return res
             raise
 
     async def update_oauth2_provider(self, pk: Any, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -593,6 +605,8 @@ class AuthentikClient:
                     p.update(data)
                     return p
             return {"pk": pk, **data}
+
+        logger.info(f"Updating OAuth2 Provider (pk={pk}): keys={list(data.keys())}")
 
         # Normalize redirect_uris if updated
         if "redirect_uris" in data:

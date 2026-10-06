@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from app.auth import get_current_user
 from app.models import (
@@ -13,6 +14,8 @@ from app.models import (
     AutoSetupOidcResponse,
 )
 from app.services.settings_service import settings_service
+
+logger = logging.getLogger("authentik_manager.routers.settings")
 
 router = APIRouter(prefix="/api/settings", tags=["Settings & Administration"])
 
@@ -59,12 +62,17 @@ async def auto_setup_oidc(
     current_user: dict = Depends(get_current_user)
 ):
     actor = current_user.get("username", "Admin")
+    logger.info(f"Received /api/settings/auto-setup-oidc request from '{actor}' for app '{req.app_name}' ({req.app_url})")
     try:
-        return await settings_service.auto_setup_oidc(req, actor=actor)
-    except HTTPException:
+        res = await settings_service.auto_setup_oidc(req, actor=actor)
+        logger.info(f"OIDC setup succeeded for '{req.app_name}': Provider PK={res.provider_pk}, Client ID={res.client_id}")
+        return res
+    except HTTPException as he:
+        logger.error(f"OIDC setup failed with HTTPException {he.status_code}: {he.detail}")
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"OIDC setup failed with unhandled exception: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail={"error": str(e)})
 
 @router.get("/detect-url")
 async def detect_url(request: Request, current_user: dict = Depends(get_current_user)):

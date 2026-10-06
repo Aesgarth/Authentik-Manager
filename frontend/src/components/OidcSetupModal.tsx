@@ -9,7 +9,12 @@ import {
   RefreshCw, 
   ExternalLink,
   X,
-  Sparkles
+  Sparkles,
+  Terminal,
+  Copy,
+  Check,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { api } from '../api/client';
 import { AutoSetupOidcResult } from '../types';
@@ -36,6 +41,9 @@ export const OidcSetupModal: React.FC<OidcSetupModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AutoSetupOidcResult | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [showLogs, setShowLogs] = useState(false);
+  const [copiedLogs, setCopiedLogs] = useState(false);
 
   // Auto-detect URL on open
   useEffect(() => {
@@ -74,6 +82,8 @@ export const OidcSetupModal: React.FC<OidcSetupModalProps> = ({
 
     setLoading(true);
     setError(null);
+    setLogs([]);
+    setShowLogs(false);
     try {
       const res = await api.autoSetupOidc({
         app_url: appUrl,
@@ -83,15 +93,87 @@ export const OidcSetupModal: React.FC<OidcSetupModalProps> = ({
         activate_immediately: activateImmediately,
       });
       setResult(res);
+      if (res.logs && res.logs.length > 0) {
+        setLogs(res.logs);
+      }
       onShowToast('Authentik OIDC / SSO configured successfully!', 'success');
       if (onSuccess) onSuccess();
     } catch (err: any) {
       const errMsg = err.message || 'Failed to automate OIDC setup in Authentik';
       setError(errMsg);
+      if (err.logs && err.logs.length > 0) {
+        setLogs(err.logs);
+        setShowLogs(true);
+      }
       onShowToast(errMsg, 'error');
     } finally {
       setLoading(false);
     }
+  };
+
+  const renderLogsPanel = () => {
+    if (!logs || logs.length === 0) return null;
+    return (
+      <div className="bg-[#070b12] border border-[#25354b] rounded-xl overflow-hidden animate-in fade-in duration-200">
+        <div className="px-3.5 py-2.5 bg-[#0f172a]/70 border-b border-[#25354b] flex items-center justify-between">
+          <div className="flex items-center gap-2 font-mono text-slate-300 text-xs">
+            <Terminal className="h-4 w-4 text-orange-400" />
+            <span className="font-semibold text-slate-200">Execution Logs & Diagnostics</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+              {logs.length} lines
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard.writeText(logs.join('\n'));
+                setCopiedLogs(true);
+                setTimeout(() => setCopiedLogs(false), 2000);
+              }}
+              className="px-2 py-1 rounded text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center gap-1 transition-colors"
+              title="Copy entire log output to clipboard"
+            >
+              {copiedLogs ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+              {copiedLogs ? 'Copied!' : 'Copy Logs'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowLogs(!showLogs)}
+              className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              title={showLogs ? 'Collapse logs' : 'Expand logs'}
+            >
+              {showLogs ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {showLogs && (
+          <div className="p-3 font-mono text-[11px] leading-relaxed max-h-56 overflow-y-auto space-y-1 bg-black/60 select-text">
+            {logs.map((log, idx) => {
+              const isError = log.includes('ERROR') || log.includes('Failed') || log.includes('aborted');
+              const isWarning = log.includes('Warning') || log.includes('Note');
+              const isSuccess = log.includes('Success');
+              return (
+                <div
+                  key={idx}
+                  className={`${
+                    isError
+                      ? 'text-rose-400 font-semibold'
+                      : isWarning
+                      ? 'text-amber-300'
+                      : isSuccess
+                      ? 'text-emerald-400'
+                      : 'text-slate-300'
+                  }`}
+                >
+                  {log}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const redirectUri = `${appUrl.replace(/\/+$/, '')}/api/auth/oidc/callback`;
@@ -178,6 +260,9 @@ export const OidcSetupModal: React.FC<OidcSetupModalProps> = ({
                 </div>
               </div>
 
+              {/* Execution Logs */}
+              {renderLogsPanel()}
+
               <div className="pt-3 flex items-center justify-between border-t border-[#25354b]">
                 <a
                   href="/api/auth/oidc/login"
@@ -213,6 +298,9 @@ export const OidcSetupModal: React.FC<OidcSetupModalProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Live Execution Logs on Error or Run */}
+              {renderLogsPanel()}
 
               {/* Step 1: Detect Application URL */}
               <div className="bg-[#0b0f17] border border-[#25354b] rounded-xl p-4 space-y-3">

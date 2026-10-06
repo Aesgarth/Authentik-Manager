@@ -1,3 +1,4 @@
+import logging
 import secrets
 import httpx
 from typing import Optional
@@ -8,6 +9,8 @@ from app.config import settings
 from app.auth import create_access_token, decode_access_token, get_current_user
 from app.models import LoginRequest, AuthStatus
 from app.services.audit_service import audit_service
+
+logger = logging.getLogger("authentik_manager.routers.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
@@ -96,9 +99,11 @@ def get_oidc_endpoints(issuer_url: str) -> tuple[str, str, str]:
 async def oidc_login(request: Request):
     """Initiates OAuth2/OIDC authorization code flow with Authentik."""
     if settings.AUTH_METHOD != "oidc":
+        logger.warning(f"[OIDC Login] Rejected: AUTH_METHOD is currently '{settings.AUTH_METHOD}', not 'oidc'")
         raise HTTPException(status_code=400, detail="OIDC is not the configured AUTH_METHOD")
 
     if not settings.OIDC_CLIENT_ID or not settings.OIDC_ISSUER_URL:
+        logger.error("[OIDC Login] Missing required settings: OIDC_CLIENT_ID or OIDC_ISSUER_URL is empty")
         raise HTTPException(
             status_code=500,
             detail="OIDC_CLIENT_ID or OIDC_ISSUER_URL is missing in configuration"
@@ -117,7 +122,8 @@ async def oidc_login(request: Request):
         "state": state,
     }
     auth_url = f"{auth_endpoint}?{urlencode(params)}"
-    
+    logger.info(f"[OIDC Login] Redirecting to Authentik authorize endpoint: {auth_endpoint} (redirect_uri: '{redirect_uri}', client_id: '{settings.OIDC_CLIENT_ID}')")
+
     response = RedirectResponse(url=auth_url)
     response.set_cookie(key="oidc_state", value=state, httponly=True, max_age=300)
     return response
@@ -125,18 +131,23 @@ async def oidc_login(request: Request):
 @router.get("/oidc/callback")
 async def oidc_callback(request: Request, response: Response, code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
     """Processes OIDC authorization code and establishes session."""
+    logger.info(f"[OIDC Callback] Received callback. Code present: {bool(code)}, State present: {bool(state)}, Error: {error}")
     if error:
+        logger.error(f"[OIDC Callback] Authentik returned error: {error}")
         raise HTTPException(status_code=400, detail=f"OIDC error: {error}")
     if not code:
+        logger.error("[OIDC Callback] Missing authorization code from query parameters")
         raise HTTPException(status_code=400, detail="Missing authorization code")
 
     saved_state = request.cookies.get("oidc_state")
     if not saved_state or saved_state != state:
+        logger.error(f"[OIDC Callback] State mismatch (CSRF protection failed). Saved state: '{saved_state}', Received state: '{state}'")
         raise HTTPException(status_code=400, detail="Invalid OIDC state (CSRF check failed)")
 
     _, token_endpoint, userinfo_endpoint = get_oidc_endpoints(settings.OIDC_ISSUER_URL)
-
     redirect_uri = settings.OIDC_REDIRECT_URI or str(request.url_for("oidc_callback"))
+
+    logger.info(f"[OIDC Callback] Exchanging authorization code at '{token_endpoint}' for redirect_uri '{redirect_uri}'...")
 
     # Exchange code for tokens
     async with httpx.AsyncClient(verify=not settings.AUTHENTIK_INSECURE_SKIP_VERIFY) as client:
@@ -152,10 +163,12 @@ async def oidc_callback(request: Request, response: Response, code: Optional[str
             headers={"Accept": "application/json"}
         )
         if token_res.status_code != 200:
+            logger.error(f"[OIDC Callback] Token exchange failed with HTTP {token_res.status_code}: {token_res.text}")
             raise HTTPException(status_code=400, detail=f"Failed to exchange token: {token_res.text}")
         
         token_data = token_res.json()
         access_token = token_data.get("access_token")
+        logger.info("[OIDC Callback] Token exchange succeeded. Fetching user profile from userinfo endpoint...")
 
         # Fetch user profile
         user_res = await client.get(
@@ -163,27 +176,31 @@ async def oidc_callback(request: Request, response: Response, code: Optional[str
             headers={"Authorization": f"Bearer {access_token}"}
         )
         if user_res.status_code != 200:
+            logger.error(f"[OIDC Callback] Userinfo request failed with HTTP {user_res.status_code}: {user_res.text}")
             raise HTTPException(status_code=400, detail="Failed to fetch userinfo from Authentik")
         
         userinfo = user_res.json()
+        logger.info(f"[OIDC Callback] Userinfo received: {userinfo}")
 
     username = userinfo.get("preferred_username") or userinfo.get("nickname") or userinfo.get("name") or "User"
     user_groups = userinfo.get("groups", [])
+    logger.info(f"[OIDC Callback] Authenticated user: '{username}', Detected Groups: {user_groups}")
 
     # Check if user is member of required admin group
     required_group = settings.OIDC_ADMIN_GROUP
     if required_group and required_group not in user_groups and "authentik Admins" not in user_groups:
+        logger.warning(f"[OIDC Callback] Access denied for '{username}'. Groups {user_groups} do not match required group '{required_group}'")
         await audit_service.log(
             actor=username,
             action="OIDC_LOGIN_DENIED",
             target_type="AUTH",
             target_name=username,
-            details=f"User lacks required admin group: {required_group}",
+            details=f"User lacks required admin group: '{required_group}'. User groups: {user_groups}",
             status="FAILED"
         )
         raise HTTPException(
             status_code=403,
-            detail=f"Access Denied: You must be a member of the '{required_group}' group in Authentik."
+            detail=f"Access Denied: You must be a member of the '{required_group}' group in Authentik. (Your groups: {user_groups})"
         )
 
     # Issue session JWT
@@ -209,7 +226,8 @@ async def oidc_callback(request: Request, response: Response, code: Optional[str
         action="OIDC_LOGIN_SUCCESS",
         target_type="AUTH",
         target_name=username,
-        details="Logged in via Authentik OIDC",
+        details=f"Logged in via Authentik OIDC (groups: {user_groups})",
         status="SUCCESS"
     )
+    logger.info(f"[OIDC Callback] Login complete for '{username}'. Redirecting to root dashboard.")
     return redirect

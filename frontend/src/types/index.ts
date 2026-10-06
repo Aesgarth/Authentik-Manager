@@ -232,6 +232,7 @@ export interface AutoSetupOidcResult {
   bound_group_pk?: string;
   auth_method: string;
   steps_completed: string[];
+  logs?: string[];
 }
 
 export interface TestConnectionResult {

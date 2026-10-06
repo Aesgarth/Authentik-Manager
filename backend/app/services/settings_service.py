@@ -3,6 +3,7 @@ import hashlib
 import logging
 import secrets
 import httpx
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from fastapi import HTTPException
 from cryptography.fernet import Fernet
@@ -488,219 +489,312 @@ class SettingsService:
 
     async def auto_setup_oidc(self, req: AutoSetupOidcRequest, actor: str = "Admin") -> AutoSetupOidcResponse:
         steps_completed = []
+        logs: List[str] = []
 
-        # 1. Verify Authentik Connection
-        is_connected, conn_err = await authentik_client.test_connection()
-        if not is_connected and not authentik_client.demo_mode:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot connect to Authentik API: {conn_err or 'Invalid token or unreachable host'}. Please configure Authentik URL and API token first."
-            )
-        steps_completed.append("Verified Authentik API connection")
+        def log_step(msg: str, level: str = "info"):
+            ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+            entry = f"[{ts}] {msg}"
+            logs.append(entry)
+            if level == "error":
+                logger.error(f"[OIDC Wizard] {msg}")
+            elif level == "warning":
+                logger.warning(f"[OIDC Wizard] {msg}")
+            else:
+                logger.info(f"[OIDC Wizard] {msg}")
 
-        # 2. Determine App URL and Redirect URI
-        raw_url = (req.app_url or self._app_url or "http://localhost:8000").strip().rstrip("/")
-        if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
-            raw_url = f"https://{raw_url}"
-        app_url = raw_url
-        redirect_uri = f"{app_url}/api/auth/oidc/callback"
-        self._app_url = app_url
-        await set_app_setting("app_url", app_url)
-        steps_completed.append(f"Configured application URL ({app_url}) and redirect URI ({redirect_uri})")
+        log_step(f"Starting OIDC setup automation. Target App: '{req.app_name}', Slug: '{req.app_slug}', Admin Group: '{req.admin_group_name}', Immediate Activation: {req.activate_immediately}")
 
-        # 3. Discover Flows
-        flows = await authentik_client.get_flows()
-        auth_flow = None
-        # Try designation=authorization flows
-        auth_flows = [f for f in flows if str(f.get("designation") or "") == "authorization"]
-        auth_flow = next((f for f in auth_flows if "implicit" in str(f.get("slug") or "").lower()), None)
-        if not auth_flow:
-            auth_flow = next((f for f in auth_flows if "consent" in str(f.get("slug") or "").lower()), None)
-        if not auth_flow and auth_flows:
-            auth_flow = auth_flows[0]
-        
-        # If not found by designation, search across all flows by slug
-        if not auth_flow:
-            auth_flow = next((f for f in flows if "implicit" in str(f.get("slug") or "").lower()), None)
-        if not auth_flow:
-            auth_flow = next((f for f in flows if "authorization" in str(f.get("slug") or "").lower()), None)
-        if not auth_flow and flows:
-            auth_flow = flows[0]
-
-        if not auth_flow:
-            raise HTTPException(
-                status_code=400,
-                detail="No authorization flow found in Authentik. Please ensure an authorization flow exists in Authentik (e.g. 'default-provider-authorization-implicit-consent')."
-            )
-
-        auth_flow_pk = auth_flow["pk"]
-
-        invalidation_flows = [f for f in flows if str(f.get("designation") or "") == "invalidation"]
-        invalidation_flow = next((f for f in invalidation_flows if "invalidation" in str(f.get("slug") or "").lower()), None)
-        if not invalidation_flow:
-            invalidation_flow = next((f for f in flows if "invalidation" in str(f.get("slug") or "").lower() or "logout" in str(f.get("slug") or "").lower()), None)
-        invalidation_flow_pk = invalidation_flow["pk"] if invalidation_flow else None
-        steps_completed.append(f"Selected authorization flow '{auth_flow.get('name', 'default')}'")
-
-        # 4. Discover Scope Mappings
-        scope_mappings = await authentik_client.get_scope_mappings()
-        wanted_scopes = {"openid", "email", "profile"}
-        property_mappings = []
-        for sm in scope_mappings:
-            sm_name = (sm.get("scope_name") or sm.get("name") or "").lower()
-            sm_managed = (sm.get("managed") or "").lower()
-            if any(s in sm_name or s in sm_managed for s in wanted_scopes):
-                property_mappings.append(str(sm["pk"]))
-        steps_completed.append(f"Mapped {len(property_mappings)} standard OIDC scopes (openid, email, profile)")
-
-        # 5. Check or Create OAuth2 Provider
-        provider_name = req.app_name or "Authentik Access Manager"
-        existing_providers = await authentik_client.get_oauth2_providers(search=provider_name)
-        target_provider = next(
-            (p for p in existing_providers if str(p.get("name") or "").strip().lower() == provider_name.strip().lower()),
-            None
-        )
-
-        if target_provider:
-            provider_pk = target_provider["pk"]
-            client_id = target_provider.get("client_id") or f"authentik-manager-{secrets.token_hex(12)}"
-            client_secret = settings.OIDC_CLIENT_SECRET or target_provider.get("client_secret") or secrets.token_urlsafe(32)
-            cur_uris = target_provider.get("redirect_uris", [])
-            has_uri = any(
-                (u.get("url") == redirect_uri if isinstance(u, dict) else str(u) == redirect_uri)
-                for u in cur_uris
-            )
-            update_data: Dict[str, Any] = {"client_secret": client_secret}
-            if not has_uri:
-                cur_uris.append({"matching_mode": "strict", "url": redirect_uri})
-                update_data["redirect_uris"] = cur_uris
-
-            await authentik_client.update_oauth2_provider(provider_pk, update_data)
-            steps_completed.append(f"Updated existing OAuth2 Provider '{provider_name}' (ID: {provider_pk})")
-        else:
-            client_id = f"authentik-manager-{secrets.token_hex(12)}"
-            client_secret = secrets.token_urlsafe(32)
-            created_provider = await authentik_client.create_oauth2_provider(
-                name=provider_name,
-                authorization_flow=str(auth_flow_pk),
-                client_id=client_id,
-                client_secret=client_secret,
-                redirect_uris=[redirect_uri],
-                property_mappings=property_mappings if property_mappings else None,
-                invalidation_flow=str(invalidation_flow_pk) if invalidation_flow_pk else None,
-                issuer_mode="per_provider"
-            )
-            provider_pk = created_provider["pk"]
-            steps_completed.append(f"Created OAuth2 Provider '{provider_name}' in Authentik (Client ID: {client_id})")
-
-        # 6. Check or Create Application in Authentik
-        app_slug = req.app_slug or "authentik-manager"
-        existing_app = await authentik_client.get_application_by_slug(app_slug)
-        if not existing_app:
-            apps = await authentik_client.get_applications()
-            existing_app = next((a for a in apps if a.get("slug") == app_slug), None)
-
-        if existing_app:
-            app_pk = str(existing_app["pk"])
-            await authentik_client.update_application(
-                app_slug,
-                {
-                    "name": provider_name,
-                    "provider": int(provider_pk),
-                    "meta_launch_url": f"{app_url}/",
-                }
-            )
-            steps_completed.append(f"Attached provider to existing Application '{app_slug}'")
-        else:
-            created_app = await authentik_client.create_application(
-                name=provider_name,
-                slug=app_slug,
-                provider_pk=int(provider_pk),
-                meta_launch_url=f"{app_url}/",
-                meta_description="Permission Matrix, RBAC Management & Mobile Bot for Authentik",
-                meta_icon="https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/authentik.svg",
-                open_in_new_tab=True
-            )
-            app_pk = str(created_app["pk"])
-            steps_completed.append(f"Created Application '{app_slug}' in Authentik")
-
-        # 7. Restrict Access via Policy Binding to Admin Group
-        admin_group_name = req.admin_group_name or "authentik Admins"
-        bound_group_pk = None
         try:
-            groups = await authentik_client.get_groups()
-            admin_group = next(
-                (g for g in groups if str(g.get("name") or "").strip().lower() == admin_group_name.strip().lower()),
+            # 1. Verify Authentik Connection
+            log_step(f"Step 1/8: Testing Authentik API connection at {settings.AUTHENTIK_URL}...")
+            is_connected, conn_err = await authentik_client.test_connection()
+            if not is_connected and not authentik_client.demo_mode:
+                err_msg = f"Cannot connect to Authentik API: {conn_err or 'Invalid token or unreachable host'}."
+                log_step(f"Step 1 Failed: {err_msg}", level="error")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{err_msg} Please configure Authentik URL and API token first."
+                )
+            log_step("Step 1 Success: Authentik API connection verified successfully")
+            steps_completed.append("Verified Authentik API connection")
+
+            # 2. Determine App URL and Redirect URI
+            log_step("Step 2/8: Configuring Application URL and OAuth redirect URI...")
+            raw_url = (req.app_url or self._app_url or "http://localhost:8000").strip().rstrip("/")
+            if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
+                raw_url = f"https://{raw_url}"
+            app_url = raw_url
+            redirect_uri = f"{app_url}/api/auth/oidc/callback"
+            self._app_url = app_url
+            await set_app_setting("app_url", app_url)
+            log_step(f"Step 2 Success: Application URL = '{app_url}' | Redirect URI = '{redirect_uri}'")
+            steps_completed.append(f"Configured application URL ({app_url}) and redirect URI ({redirect_uri})")
+
+            # 3. Discover Flows
+            log_step("Step 3/8: Discovering authentication and authorization flows in Authentik...")
+            flows = await authentik_client.get_flows()
+            log_step(f"Found {len(flows)} total flow instances in Authentik")
+
+            auth_flow = None
+            # Try designation=authorization flows
+            auth_flows = [f for f in flows if str(f.get("designation") or "") == "authorization"]
+            auth_flow = next((f for f in auth_flows if "implicit" in str(f.get("slug") or "").lower()), None)
+            if not auth_flow:
+                auth_flow = next((f for f in auth_flows if "consent" in str(f.get("slug") or "").lower()), None)
+            if not auth_flow and auth_flows:
+                auth_flow = auth_flows[0]
+
+            # If not found by designation, search across all flows by slug
+            if not auth_flow:
+                auth_flow = next((f for f in flows if "implicit" in str(f.get("slug") or "").lower()), None)
+            if not auth_flow:
+                auth_flow = next((f for f in flows if "authorization" in str(f.get("slug") or "").lower()), None)
+            if not auth_flow and flows:
+                auth_flow = flows[0]
+
+            if not auth_flow:
+                err_msg = "No authorization flow found in Authentik. Please ensure an authorization flow exists in Authentik (e.g. 'default-provider-authorization-implicit-consent')."
+                log_step(f"Step 3 Failed: {err_msg}", level="error")
+                raise HTTPException(status_code=400, detail=err_msg)
+
+            auth_flow_pk = auth_flow["pk"]
+            log_step(f"Step 3 Success: Selected authorization flow '{auth_flow.get('name', 'default')}' (slug: '{auth_flow.get('slug')}', pk: {auth_flow_pk})")
+
+            invalidation_flows = [f for f in flows if str(f.get("designation") or "") == "invalidation"]
+            invalidation_flow = next((f for f in invalidation_flows if "invalidation" in str(f.get("slug") or "").lower()), None)
+            if not invalidation_flow:
+                invalidation_flow = next((f for f in flows if "invalidation" in str(f.get("slug") or "").lower() or "logout" in str(f.get("slug") or "").lower()), None)
+            invalidation_flow_pk = invalidation_flow["pk"] if invalidation_flow else None
+            if invalidation_flow:
+                log_step(f"Selected invalidation/logout flow: '{invalidation_flow.get('name')}' (pk: {invalidation_flow_pk})")
+
+            steps_completed.append(f"Selected authorization flow '{auth_flow.get('name', 'default')}'")
+
+            # 4. Discover Scope Mappings
+            log_step("Step 4/8: Discovering OpenID scope property mappings...")
+            scope_mappings = await authentik_client.get_scope_mappings()
+            wanted_scopes = {"openid", "email", "profile", "groups", "phone"}
+            property_mappings = []
+            mapped_names = []
+            for sm in scope_mappings:
+                sm_name = (sm.get("scope_name") or sm.get("name") or "").lower()
+                sm_managed = (sm.get("managed") or "").lower()
+                if any(s in sm_name or s in sm_managed for s in wanted_scopes):
+                    property_mappings.append(str(sm["pk"]))
+                    mapped_names.append(sm.get("name") or sm.get("scope_name"))
+            log_step(f"Step 4 Success: Mapped {len(property_mappings)} standard scopes: {', '.join(mapped_names) if mapped_names else 'none'}")
+            steps_completed.append(f"Mapped {len(property_mappings)} standard OIDC scopes (openid, email, profile, groups, phone)")
+
+            # 5. Check or Create OAuth2 Provider
+            provider_name = req.app_name or "Authentik Access Manager"
+            log_step(f"Step 5/8: Querying existing OAuth2 Providers in Authentik for '{provider_name}'...")
+            existing_providers = await authentik_client.get_oauth2_providers()
+            target_provider = next(
+                (p for p in existing_providers if str(p.get("name") or "").strip().lower() == provider_name.strip().lower()),
                 None
             )
-            if admin_group:
-                bound_group_pk = str(admin_group["pk"])
-                bindings = await authentik_client.get_policy_bindings(target_pk=app_pk)
-                existing_binding = next((b for b in bindings if str(b.get("group")) == bound_group_pk), None)
-                if not existing_binding:
-                    await authentik_client.create_policy_binding(
-                        target_pk=app_pk,
-                        group_pk=bound_group_pk,
-                        order=0,
-                        negate=False
-                    )
-                await authentik_client.set_app_policy_engine_mode(app_slug, "any")
-                steps_completed.append(f"Enforced access restriction: bound group '{admin_group_name}' to Application")
+
+            if target_provider:
+                provider_pk = target_provider["pk"]
+                log_step(f"Found existing OAuth2 Provider '{provider_name}' (ID: {provider_pk}). Updating configuration...")
+                client_id = target_provider.get("client_id") or f"authentik-manager-{secrets.token_hex(12)}"
+                client_secret = settings.OIDC_CLIENT_SECRET or target_provider.get("client_secret") or secrets.token_urlsafe(32)
+                cur_uris = target_provider.get("redirect_uris", [])
+                has_uri = any(
+                    (u.get("url") == redirect_uri if isinstance(u, dict) else str(u) == redirect_uri)
+                    for u in cur_uris
+                )
+                update_data: Dict[str, Any] = {"client_secret": client_secret}
+                if not has_uri:
+                    log_step(f"Adding redirect URI '{redirect_uri}' to existing provider...")
+                    cur_uris.append({"matching_mode": "strict", "url": redirect_uri})
+                    update_data["redirect_uris"] = cur_uris
+
+                if property_mappings:
+                    existing_pms = [str(x) for x in target_provider.get("property_mappings", [])]
+                    merged_pms = list(dict.fromkeys(existing_pms + property_mappings))
+                    update_data["property_mappings"] = merged_pms
+                    log_step(f"Ensuring {len(merged_pms)} scope mappings attached to existing provider")
+
+                await authentik_client.update_oauth2_provider(provider_pk, update_data)
+                log_step(f"Step 5 Success: Updated existing OAuth2 Provider '{provider_name}' (ID: {provider_pk})")
+                steps_completed.append(f"Updated existing OAuth2 Provider '{provider_name}' (ID: {provider_pk})")
             else:
-                steps_completed.append(f"Note: Admin group '{admin_group_name}' was not found in Authentik groups")
+                log_step(f"No existing provider '{provider_name}' found. Creating new OAuth2 Provider...")
+                client_id = f"authentik-manager-{secrets.token_hex(12)}"
+                client_secret = secrets.token_urlsafe(32)
+                created_provider = await authentik_client.create_oauth2_provider(
+                    name=provider_name,
+                    authorization_flow=str(auth_flow_pk),
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    redirect_uris=[redirect_uri],
+                    property_mappings=property_mappings if property_mappings else None,
+                    invalidation_flow=str(invalidation_flow_pk) if invalidation_flow_pk else None,
+                    issuer_mode="per_provider"
+                )
+                provider_pk = created_provider["pk"]
+                log_step(f"Step 5 Success: Created OAuth2 Provider '{provider_name}' (ID: {provider_pk}, Client ID: {client_id})")
+                steps_completed.append(f"Created OAuth2 Provider '{provider_name}' in Authentik (Client ID: {client_id})")
+
+            # 6. Check or Create Application in Authentik
+            app_slug = req.app_slug or "authentik-manager"
+            log_step(f"Step 6/8: Checking if Application '{app_slug}' exists in Authentik...")
+            existing_app = await authentik_client.get_application_by_slug(app_slug)
+            if not existing_app:
+                apps = await authentik_client.get_applications()
+                existing_app = next((a for a in apps if str(a.get("slug") or "").lower() == app_slug.lower()), None)
+
+            if existing_app:
+                app_pk = str(existing_app["pk"])
+                log_step(f"Found existing Application '{app_slug}' (PK: {app_pk}). Updating provider binding to provider #{provider_pk}...")
+                await authentik_client.update_application(
+                    app_slug,
+                    {
+                        "name": provider_name,
+                        "provider": int(provider_pk),
+                        "meta_launch_url": f"{app_url}/",
+                    }
+                )
+                log_step(f"Step 6 Success: Attached provider #{provider_pk} to Application '{app_slug}'")
+                steps_completed.append(f"Attached provider to existing Application '{app_slug}'")
+            else:
+                log_step(f"Creating new Application '{provider_name}' (slug: '{app_slug}') bound to provider #{provider_pk}...")
+                created_app = await authentik_client.create_application(
+                    name=provider_name,
+                    slug=app_slug,
+                    provider_pk=int(provider_pk),
+                    meta_launch_url=f"{app_url}/",
+                    meta_description="Permission Matrix, RBAC Management & Mobile Bot for Authentik",
+                    meta_icon="https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/authentik.svg",
+                    open_in_new_tab=True
+                )
+                app_pk = str(created_app["pk"])
+                log_step(f"Step 6 Success: Created Application '{app_slug}' in Authentik (PK: {app_pk})")
+                steps_completed.append(f"Created Application '{app_slug}' in Authentik")
+
+            # 7. Restrict Access via Policy Binding to Admin Group
+            admin_group_name = req.admin_group_name or "authentik Admins"
+            log_step(f"Step 7/8: Enforcing RBAC access restriction for group '{admin_group_name}'...")
+            bound_group_pk = None
+            try:
+                groups = await authentik_client.get_groups()
+                admin_group = next(
+                    (g for g in groups if str(g.get("name") or "").strip().lower() == admin_group_name.strip().lower()),
+                    None
+                )
+                if admin_group:
+                    bound_group_pk = str(admin_group["pk"])
+                    log_step(f"Found admin group '{admin_group_name}' (PK: {bound_group_pk}). Checking existing policy bindings...")
+                    bindings = await authentik_client.get_policy_bindings(target_pk=app_pk)
+                    existing_binding = next((b for b in bindings if str(b.get("group")) == bound_group_pk), None)
+                    if not existing_binding:
+                        log_step(f"Binding group '{admin_group_name}' to Application '{app_slug}'...")
+                        await authentik_client.create_policy_binding(
+                            target_pk=app_pk,
+                            group_pk=bound_group_pk,
+                            order=0,
+                            negate=False
+                        )
+                        log_step(f"Created policy binding for group '{admin_group_name}'")
+                    else:
+                        log_step(f"Group '{admin_group_name}' is already bound to Application '{app_slug}'")
+                    await authentik_client.set_app_policy_engine_mode(app_slug, "any")
+                    log_step("Enforced Application policy engine mode = 'any'")
+                    steps_completed.append(f"Enforced access restriction: bound group '{admin_group_name}' to Application")
+                else:
+                    log_step(f"Note: Admin group '{admin_group_name}' was not found in Authentik groups", level="warning")
+                    steps_completed.append(f"Note: Admin group '{admin_group_name}' was not found in Authentik groups")
+            except Exception as e:
+                log_step(f"Warning: Could not bind admin group to application: {e}", level="warning")
+                steps_completed.append(f"Note: Admin group access binding skipped: {str(e)}")
+
+            # 8. Save OIDC Settings in database
+            log_step("Step 8/8: Saving OIDC configuration into local database...")
+            issuer_url = f"{settings.AUTHENTIK_URL.rstrip('/')}/application/o/{app_slug}/"
+            encrypted_secret = self.encrypt_secret(client_secret)
+
+            await set_app_setting("oidc_client_id", client_id)
+            await set_app_setting("oidc_client_secret", encrypted_secret, is_secret=True)
+            await set_app_setting("oidc_issuer_url", issuer_url)
+            await set_app_setting("oidc_redirect_uri", redirect_uri)
+            await set_app_setting("oidc_admin_group", admin_group_name)
+
+            settings.OIDC_CLIENT_ID = client_id
+            settings.OIDC_CLIENT_SECRET = client_secret
+            settings.OIDC_ISSUER_URL = issuer_url
+            settings.OIDC_REDIRECT_URI = redirect_uri
+            settings.OIDC_ADMIN_GROUP = admin_group_name
+
+            if req.activate_immediately:
+                await set_app_setting("auth_method", "oidc")
+                settings.AUTH_METHOD = "oidc"
+                log_step("Activated Authentik OIDC Single Sign-On as active authentication method")
+                steps_completed.append("Activated Authentik OIDC Single Sign-On as active authentication method")
+            else:
+                log_step("OIDC credentials saved. Authentication method left unchanged.")
+                steps_completed.append("Saved OIDC configuration (Authentication method unchanged)")
+
+            # 9. Audit Log
+            await audit_service.log(
+                actor=actor,
+                action="OIDC_AUTO_SETUP",
+                target_type="AUTH",
+                target_name=app_slug,
+                details=f"Automated OIDC setup: Provider {provider_name} (ID: {provider_pk}), App {app_slug}, Group '{admin_group_name}'. Active method: {settings.AUTH_METHOD}",
+                status="SUCCESS"
+            )
+            log_step("OIDC Automation Completed Successfully!")
+
+            return AutoSetupOidcResponse(
+                success=True,
+                message="Authentik OIDC / Single Sign-On setup completed successfully!",
+                app_url=app_url,
+                provider_pk=provider_pk,
+                provider_name=provider_name,
+                client_id=client_id,
+                client_secret_masked=self._mask_token(client_secret),
+                issuer_url=issuer_url,
+                redirect_uri=redirect_uri,
+                application_pk=app_pk,
+                application_slug=app_slug,
+                bound_group_name=admin_group_name,
+                bound_group_pk=bound_group_pk,
+                auth_method=settings.AUTH_METHOD,
+                steps_completed=steps_completed,
+                logs=logs
+            )
+
+        except HTTPException as he:
+            err_msg = he.detail if isinstance(he.detail, str) else str(he.detail)
+            log_step(f"Setup aborted with HTTP {he.status_code}: {err_msg}", level="error")
+            await audit_service.log(
+                actor=actor,
+                action="OIDC_AUTO_SETUP_FAILED",
+                target_type="AUTH",
+                target_name=req.app_slug or "authentik-manager",
+                details=f"OIDC auto setup failed: {err_msg}",
+                status="FAILED"
+            )
+            raise HTTPException(
+                status_code=he.status_code,
+                detail={"error": err_msg, "logs": logs, "steps_completed": steps_completed}
+            )
         except Exception as e:
-            logger.warning(f"Could not bind admin group to application: {e}")
-            steps_completed.append(f"Note: Admin group access binding skipped: {str(e)}")
-
-        # 8. Save OIDC Settings in database
-        issuer_url = f"{settings.AUTHENTIK_URL.rstrip('/')}/application/o/{app_slug}/"
-        encrypted_secret = self.encrypt_secret(client_secret)
-
-        await set_app_setting("oidc_client_id", client_id)
-        await set_app_setting("oidc_client_secret", encrypted_secret, is_secret=True)
-        await set_app_setting("oidc_issuer_url", issuer_url)
-        await set_app_setting("oidc_redirect_uri", redirect_uri)
-        await set_app_setting("oidc_admin_group", admin_group_name)
-
-        settings.OIDC_CLIENT_ID = client_id
-        settings.OIDC_CLIENT_SECRET = client_secret
-        settings.OIDC_ISSUER_URL = issuer_url
-        settings.OIDC_REDIRECT_URI = redirect_uri
-        settings.OIDC_ADMIN_GROUP = admin_group_name
-
-        if req.activate_immediately:
-            await set_app_setting("auth_method", "oidc")
-            settings.AUTH_METHOD = "oidc"
-            steps_completed.append("Activated Authentik OIDC Single Sign-On as active authentication method")
-        else:
-            steps_completed.append("Saved OIDC configuration (Authentication method unchanged)")
-
-        # 9. Audit Log
-        await audit_service.log(
-            actor=actor,
-            action="OIDC_AUTO_SETUP",
-            target_type="AUTH",
-            target_name=app_slug,
-            details=f"Automated OIDC setup: Provider {provider_name} (ID: {provider_pk}), App {app_slug}, Group '{admin_group_name}'. Active method: {settings.AUTH_METHOD}",
-            status="SUCCESS"
-        )
-
-        return AutoSetupOidcResponse(
-            success=True,
-            message="Authentik OIDC / Single Sign-On setup completed successfully!",
-            app_url=app_url,
-            provider_pk=provider_pk,
-            provider_name=provider_name,
-            client_id=client_id,
-            client_secret_masked=self._mask_token(client_secret),
-            issuer_url=issuer_url,
-            redirect_uri=redirect_uri,
-            application_pk=app_pk,
-            application_slug=app_slug,
-            bound_group_name=admin_group_name,
-            bound_group_pk=bound_group_pk,
-            auth_method=settings.AUTH_METHOD,
-            steps_completed=steps_completed
-        )
+            err_msg = str(e)
+            log_step(f"Unexpected error during OIDC setup: {err_msg}", level="error")
+            logger.exception(f"[OIDC Wizard] Unexpected exception: {err_msg}")
+            await audit_service.log(
+                actor=actor,
+                action="OIDC_AUTO_SETUP_FAILED",
+                target_type="AUTH",
+                target_name=req.app_slug or "authentik-manager",
+                details=f"OIDC auto setup failed: {err_msg}",
+                status="FAILED"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={"error": err_msg, "logs": logs, "steps_completed": steps_completed}
+            )
 
 settings_service = SettingsService()

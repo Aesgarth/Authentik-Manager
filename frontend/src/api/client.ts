@@ -350,7 +350,17 @@ export const api = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'Failed to configure OIDC in Authentik' }));
-      throw new Error(err.detail || 'Failed to configure OIDC in Authentik');
+      let detailMsg = 'Failed to configure OIDC in Authentik';
+      let errorLogs: string[] = [];
+      if (typeof err.detail === 'object' && err.detail !== null) {
+        detailMsg = err.detail.error || err.detail.message || JSON.stringify(err.detail);
+        errorLogs = err.detail.logs || [];
+      } else if (typeof err.detail === 'string') {
+        detailMsg = err.detail;
+      }
+      const errorObj: any = new Error(detailMsg);
+      errorObj.logs = errorLogs;
+      throw errorObj;
     }
     return res.json();
   },

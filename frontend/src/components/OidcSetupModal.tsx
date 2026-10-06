@@ -73,8 +73,9 @@ export const OidcSetupModal: React.FC<OidcSetupModalProps> = ({
     onShowToast(`Applied current browser URL: ${window.location.origin}`, 'info');
   };
 
-  const handleExecuteSetup = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleExecuteSetup = async (e?: React.FormEvent | React.MouseEvent) => {
+    if (e) e.preventDefault();
+    if (loading) return;
     if (!appUrl) {
       setError('Application URL is required for OAuth callback generation.');
       return;
@@ -440,6 +441,7 @@ export const OidcSetupModal: React.FC<OidcSetupModalProps> = ({
                 </button>
                 <button
                   type="submit"
+                  onClick={(e) => handleExecuteSetup(e)}
                   disabled={loading}
                   className="px-5 py-2.5 rounded-xl bg-[#fd7e14] hover:bg-[#ea6c0a] disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-2 transition-all shadow hover:shadow-orange-500/20 cursor-pointer"
                 >

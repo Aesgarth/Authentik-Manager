@@ -299,7 +299,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   }
 
   return (
-    <form onSubmit={handleSave} className="space-y-6">
+    <>
+      <form onSubmit={handleSave} className="space-y-6">
       
       {/* Page Title & Overview */}
       <div className="bg-[#111827] border border-[#25354b] rounded-2xl p-6 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -1072,17 +1073,18 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         </button>
       </div>
 
-      {/* 1-Click OIDC Auto-Setup Wizard Modal */}
-      <OidcSetupModal
-        isOpen={isOidcModalOpen}
-        onClose={() => setIsOidcModalOpen(false)}
-        onShowToast={onShowToast}
-        onSuccess={() => {
-          loadSettings();
-          if (onSettingsUpdated) onSettingsUpdated();
-        }}
-      />
-
     </form>
+
+    {/* 1-Click OIDC Auto-Setup Wizard Modal */}
+    <OidcSetupModal
+      isOpen={isOidcModalOpen}
+      onClose={() => setIsOidcModalOpen(false)}
+      onShowToast={onShowToast}
+      onSuccess={() => {
+        loadSettings();
+        if (onSettingsUpdated) onSettingsUpdated();
+      }}
+    />
+  </>
   );
 };

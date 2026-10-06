@@ -7,7 +7,6 @@ import {
   CheckCircle2, 
   AlertCircle, 
   RefreshCw, 
-  ExternalLink,
   X,
   Sparkles,
   Terminal,
@@ -287,30 +286,50 @@ export const OidcSetupModal: React.FC<OidcSetupModalProps> = ({
                 </div>
               </div>
 
+              {/* SSO Active Alert Banner */}
+              {result.auth_method === 'oidc' && (
+                <div className="p-4 rounded-xl bg-gradient-to-r from-orange-500/10 to-amber-500/10 border border-orange-500/30 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+                  <div className="space-y-0.5">
+                    <div className="font-semibold text-white flex items-center gap-1.5">
+                      <Lock className="h-4 w-4 text-[#fd7e14]" />
+                      <span>Authentik Single Sign-On is now Active!</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300">
+                      To access the dashboard, you must now sign in with your Authentik administrator account.
+                    </p>
+                  </div>
+                  <a
+                    href="/api/auth/oidc/login"
+                    className="px-4 py-2 rounded-xl bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-bold shrink-0 flex items-center justify-center gap-1.5 shadow transition-all cursor-pointer"
+                  >
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Sign In with Authentik
+                  </a>
+                </div>
+              )}
+
               {/* Execution Logs */}
               {renderLogsPanel()}
 
               <div className="pt-3 flex items-center justify-between border-t border-[#25354b]">
-                <a
-                  href="/api/auth/oidc/login"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-4 py-2.5 rounded-xl bg-orange-500/20 hover:bg-orange-500/30 text-orange-200 border border-orange-500/40 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                >
-                  <ExternalLink className="h-4 w-4" />
-                  Test Authentik OIDC Login (New Tab)
-                </a>
-
                 <button
                   type="button"
                   onClick={() => {
                     onClose();
                     window.location.reload();
                   }}
-                  className="px-5 py-2.5 rounded-xl bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-semibold transition-colors shadow"
+                  className="px-4 py-2.5 rounded-xl border border-[#25354b] text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-medium transition-colors cursor-pointer"
                 >
-                  Done & Reload Dashboard
+                  Close
                 </button>
+
+                <a
+                  href="/api/auth/oidc/login"
+                  className="px-5 py-2.5 rounded-xl bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-orange-500/20 transition-all cursor-pointer"
+                >
+                  <ShieldCheck className="h-4 w-4" />
+                  Sign In via Authentik SSO Now
+                </a>
               </div>
             </div>
           ) : (

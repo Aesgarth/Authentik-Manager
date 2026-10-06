@@ -24,7 +24,7 @@ import { FlowGuideModal } from './components/FlowGuideModal';
 import { WhatsAppModal } from './components/WhatsAppModal';
 import { TemplateModal } from './components/TemplateModal';
 import { SettingsPanel } from './components/SettingsPanel';
-import { Lock, AlertCircle, CheckCircle, ShieldCheck, Sparkles, ExternalLink } from 'lucide-react';
+import { Lock, AlertCircle, CheckCircle, ShieldCheck, Sparkles, ArrowRight, ShieldAlert, RefreshCw } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [matrixData, setMatrixData] = useState<AccessMatrixData | null>(null);
@@ -51,9 +51,11 @@ export const App: React.FC = () => {
   // Role Presets / Personas
   const [templates, setTemplates] = useState<AccessTemplate[]>([]);
 
-  // Password Login state
+  // Login & Error state
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [oidcError, setOidcError] = useState<string | null>(null);
+  const [showBreakglass, setShowBreakglass] = useState<boolean>(false);
 
   // Toast
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -66,10 +68,23 @@ export const App: React.FC = () => {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [matrix, h, a, invs, logs, guide, wa, tmpls] = await Promise.all([
+      // 1. Fetch authentication state first
+      const authStatus = await api.getAuthStatus();
+      setAuth(authStatus);
+
+      // Also get system health if possible
+      const h = await api.getHealth().catch(() => null);
+      if (h) setHealth(h);
+
+      // If login is required and user is not authenticated, DO NOT call protected endpoints!
+      if (authStatus.auth_method !== 'none' && !authStatus.authenticated) {
+        setLoading(false);
+        return;
+      }
+
+      // 2. Fetch authenticated dashboard resources
+      const [matrix, invs, logs, guide, wa, tmpls] = await Promise.all([
         api.getMatrix(),
-        api.getHealth(),
-        api.getAuthStatus(),
         api.getInvites(),
         api.getAuditLogs(50),
         api.getExpressionPolicySnippet(),
@@ -77,8 +92,6 @@ export const App: React.FC = () => {
         api.getTemplates().catch(() => []),
       ]);
       setMatrixData(matrix);
-      setHealth(h);
-      setAuth(a);
       setInvites(invs);
       setAuditLogs(logs);
       setFlowGuide(guide);
@@ -86,21 +99,27 @@ export const App: React.FC = () => {
       if (tmpls) setTemplates(tmpls);
     } catch (err: any) {
       console.error('Failed to load data:', err);
-      showToast(err.message || 'Failed to connect to backend', 'error');
+      const isAuthErr = err.message?.includes('Authentication required') || err.message?.includes('401');
+      if (isAuthErr) {
+        setAuth(prev => prev ? { ...prev, authenticated: false } : { authenticated: false, auth_method: 'oidc', is_admin: false, demo_mode: false });
+      } else {
+        showToast(err.message || 'Failed to connect to backend', 'error');
+      }
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadData();
     // Catch OIDC callback error redirect parameters
     const params = new URLSearchParams(window.location.search);
     const oidcErr = params.get('oidc_error') || params.get('error');
     if (oidcErr) {
+      setOidcError(oidcErr);
       showToast(oidcErr, 'error');
       window.history.replaceState({}, document.title, window.location.pathname);
     }
+    loadData();
   }, [loadData]);
 
   // Periodic poll for WhatsApp status when modal is open
@@ -484,6 +503,181 @@ export const App: React.FC = () => {
   // Check unprotected apps
   const unprotectedApps = matrixData ? matrixData.apps.filter((a) => !a.is_protected) : [];
 
+  // Dedicated Full-Screen Login View when Authentication is Required
+  if (auth && !auth.authenticated && auth.auth_method !== 'none') {
+    return (
+      <div className="min-h-screen bg-[#070b12] text-slate-100 flex flex-col justify-center items-center p-4 font-sans selection:bg-orange-500/30 selection:text-orange-200 relative overflow-hidden">
+        {/* Subtle background glow */}
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-orange-500/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="w-full max-w-md bg-[#111827] border border-[#25354b] rounded-2xl p-7 shadow-2xl relative z-10 space-y-6 animate-in fade-in zoom-in-95 duration-200">
+          {/* Header */}
+          <div className="text-center space-y-2">
+            <div className="h-14 w-14 rounded-2xl bg-orange-500/15 border border-orange-500/30 flex items-center justify-center text-[#fd7e14] mx-auto shadow-inner">
+              <ShieldCheck className="h-7 w-7" />
+            </div>
+            <h1 className="text-xl font-bold text-white tracking-tight">Authentik Access Manager</h1>
+            <p className="text-xs text-slate-400">Enterprise Permission Matrix & Mobile Bot</p>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-300 text-[11px] font-medium">
+              <Lock className="h-3 w-3" />
+              <span>Authentication Required</span>
+            </div>
+          </div>
+
+          {/* OIDC Single Sign-On View */}
+          {auth.auth_method === 'oidc' && (
+            <div className="space-y-4">
+              <div className="bg-[#0b0f17] border border-[#25354b] rounded-xl p-4 text-xs text-slate-300 space-y-2">
+                <div className="font-semibold text-white flex items-center gap-1.5">
+                  <ShieldCheck className="h-4 w-4 text-[#fd7e14]" />
+                  <span>Authentik Single Sign-On Active</span>
+                </div>
+                <p className="text-slate-400 leading-relaxed text-[11px]">
+                  Access is protected by your Authentik identity provider. Sign in with your authorized Authentik administrator credentials to access the manager.
+                </p>
+              </div>
+
+              {oidcError && (
+                <div className="p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2.5">
+                  <AlertCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-semibold text-rose-100">Sign-in Rejected</div>
+                    <div className="text-[11px] mt-0.5 text-rose-300">{oidcError}</div>
+                  </div>
+                </div>
+              )}
+
+              <a
+                href="/api/auth/oidc/login"
+                className="w-full py-3.5 px-5 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20 hover:shadow-orange-500/30 transition-all cursor-pointer"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                <span>Sign In with Authentik SSO</span>
+                <ArrowRight className="h-4 w-4 ml-1 opacity-80" />
+              </a>
+
+              {/* Master Password Breakglass Toggle */}
+              {showBreakglass ? (
+                <form onSubmit={handlePasswordLogin} className="space-y-3 pt-2 border-t border-[#25354b] animate-in fade-in">
+                  <div className="text-[11px] text-slate-400 text-center">
+                    Emergency Master Password Login:
+                  </div>
+                  {loginError && (
+                    <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[11px]">
+                      {loginError}
+                    </div>
+                  )}
+                  <input
+                    type="password"
+                    placeholder="Enter master password..."
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-[#fd7e14]"
+                    autoFocus
+                  />
+                  <button
+                    type="submit"
+                    className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold py-2 rounded-xl transition-colors cursor-pointer"
+                  >
+                    Sign In with Master Password
+                  </button>
+                </form>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowBreakglass(true)}
+                  className="text-[11px] text-slate-500 hover:text-slate-400 transition-colors block mx-auto pt-1 cursor-pointer"
+                >
+                  Use Master Admin Password instead
+                </button>
+              )}
+
+              <div className="pt-1 text-center text-[10px] text-slate-500">
+                Restricted to members of the configured administrator group.
+              </div>
+            </div>
+          )}
+
+          {/* Password Auth View */}
+          {auth.auth_method === 'password' && (
+            <form onSubmit={handlePasswordLogin} className="space-y-4">
+              <div className="text-xs text-slate-400 text-center">
+                Enter your administrator password to sign in.
+              </div>
+              {loginError && (
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
+                  {loginError}
+                </div>
+              )}
+              <input
+                type="password"
+                placeholder="Enter password..."
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-[#fd7e14]"
+                autoFocus
+              />
+              <button
+                type="submit"
+                className="w-full bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-semibold py-2.5 rounded-xl transition-colors shadow cursor-pointer"
+              >
+                Sign In
+              </button>
+            </form>
+          )}
+
+          {/* Forward Auth View */}
+          {auth.auth_method === 'forward_auth' && (
+            <div className="bg-[#0b0f17] border border-[#25354b] rounded-xl p-4 text-xs text-slate-300 space-y-2">
+              <div className="font-semibold text-white flex items-center gap-1.5">
+                <ShieldAlert className="h-4 w-4 text-amber-400" />
+                <span>Forward Auth Mode Active</span>
+              </div>
+              <p className="text-slate-400 leading-relaxed text-[11px]">
+                Forward Authentication headers were not detected. Please access Authentik Access Manager through your configured reverse proxy or Authentik Outpost.
+              </p>
+            </div>
+          )}
+
+          {/* Footer status */}
+          <div className="pt-4 border-t border-[#25354b] flex items-center justify-between text-[11px] text-slate-500">
+            <span className="flex items-center gap-1.5">
+              <span className={`h-2 w-2 rounded-full ${health?.authentik_connected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+              <span>{health?.authentik_connected ? 'Authentik Connected' : 'Authentik API Check'}</span>
+            </span>
+            <button
+              type="button"
+              onClick={loadData}
+              className="hover:text-slate-300 flex items-center gap-1 transition-colors cursor-pointer"
+            >
+              <RefreshCw className="h-3 w-3" />
+              <span>Retry</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Floating Toast Notification */}
+        {toast && (
+          <div className="fixed bottom-6 right-6 z-50 animate-in fade-in slide-in-from-bottom-5">
+            <div
+              className={`px-4 py-3 rounded-xl shadow-2xl border text-xs font-medium flex items-center space-x-2.5 backdrop-blur-md ${
+                toast.type === 'success'
+                  ? 'bg-[#111827] border-emerald-500/40 text-emerald-200'
+                  : toast.type === 'error'
+                  ? 'bg-[#111827] border-rose-500/40 text-rose-200'
+                  : 'bg-[#111827] border-orange-500/40 text-orange-200'
+              }`}
+            >
+              {toast.type === 'success' && <CheckCircle className="h-4 w-4 text-emerald-400" />}
+              {toast.type === 'error' && <AlertCircle className="h-4 w-4 text-rose-400" />}
+              <span>{toast.message}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#0b0f17] text-slate-100 flex flex-col md:flex-row font-sans selection:bg-orange-500/30 selection:text-orange-200">
       
@@ -508,65 +702,7 @@ export const App: React.FC = () => {
       {/* Main Content Area */}
       <main className="flex-1 min-w-0 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         
-        {/* Unauthenticated Login Screen if password auth is active */}
-        {auth && !auth.authenticated && auth.auth_method === 'password' && (
-          <div className="max-w-md mx-auto my-16 bg-[#111827] border border-[#25354b] rounded-2xl p-6 shadow-2xl text-center">
-            <div className="h-12 w-12 rounded-xl bg-orange-500/15 text-[#fd7e14] border border-orange-500/30 mx-auto flex items-center justify-center mb-4">
-              <Lock className="h-6 w-6" />
-            </div>
-            <h2 className="text-lg font-bold text-white mb-1">authentik Administrator Login</h2>
-            <p className="text-xs text-slate-400 mb-5">
-              Enter your admin password to access the Authentik Access Manager.
-            </p>
-            {loginError && (
-              <div className="p-3 mb-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
-                {loginError}
-              </div>
-            )}
-            <form onSubmit={handlePasswordLogin} className="space-y-3">
-              <input
-                type="password"
-                placeholder="Enter password..."
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                className="w-full bg-[#0b0f17] border border-[#25354b] rounded-xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-[#fd7e14]"
-                autoFocus
-              />
-              <button
-                type="submit"
-                className="w-full bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-semibold py-2.5 rounded-xl transition-colors shadow"
-              >
-                Sign In
-              </button>
-            </form>
-          </div>
-        )}
-
-        {/* Unauthenticated Login Screen if OIDC Single Sign-On is active */}
-        {auth && !auth.authenticated && auth.auth_method === 'oidc' && (
-          <div className="max-w-md mx-auto my-16 bg-[#111827] border border-[#25354b] rounded-2xl p-6 shadow-2xl text-center">
-            <div className="h-12 w-12 rounded-xl bg-orange-500/15 text-[#fd7e14] border border-orange-500/30 mx-auto flex items-center justify-center mb-4">
-              <ShieldCheck className="h-6 w-6" />
-            </div>
-            <h2 className="text-lg font-bold text-white mb-1">Authentik Single Sign-On</h2>
-            <p className="text-xs text-slate-400 mb-6">
-              Access to Authentik Access Manager is protected by your Authentik identity provider. Sign in with your authorized Authentik credentials to continue.
-            </p>
-            <a
-              href="/api/auth/oidc/login"
-              className="w-full inline-flex items-center justify-center gap-2 bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-semibold py-3 px-4 rounded-xl transition-all shadow-lg hover:shadow-orange-500/20"
-            >
-              <ExternalLink className="h-4 w-4" />
-              Sign In with Authentik
-            </a>
-            <div className="mt-6 pt-4 border-t border-[#25354b] text-[11px] text-slate-500">
-              Only members of the configured admin group (e.g. <span className="font-mono text-slate-400">authentik Admins</span>) have access.
-            </div>
-          </div>
-        )}
-
         {/* Normal Authenticated View */}
-        {(!auth || auth.authenticated || auth.auth_method === 'none') && (
           <>
             {/* Security Recommendation Banner if auth_method === 'none' */}
             {auth && auth.auth_method === 'none' && !health?.demo_mode && activeTab !== 'settings' && (
@@ -689,7 +825,6 @@ export const App: React.FC = () => {
               />
             )}
           </>
-        )}
 
       </main>
 

@@ -36,7 +36,9 @@ async def get_auth_status(request: Request):
 
 @router.post("/login")
 async def login_password(req: LoginRequest, response: Response):
-    if settings.AUTH_METHOD != "password":
+    # Allow master admin password as breakglass even if auth method is OIDC or forward_auth
+    is_master_breakglass = bool(settings.ADMIN_PASSWORD and req.password == settings.ADMIN_PASSWORD)
+    if settings.AUTH_METHOD != "password" and not is_master_breakglass:
         raise HTTPException(
             status_code=400,
             detail=f"Password login not enabled (active auth method: {settings.AUTH_METHOD})"

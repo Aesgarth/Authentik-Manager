@@ -88,7 +88,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
 
     Object.entries(tpl.assignments).forEach(([key, role]) => {
       if (key === '*') return;
-      const app = apps.find((a) => a.pk === key || a.slug === key);
+      const app = apps.find((a) => a.pk === key || (a.slug && a.slug.toLowerCase() === key.toLowerCase()));
       if (app) {
         newApps[app.pk] = true;
         if (role === 'admin' && app.granular_admin_group_pk) {

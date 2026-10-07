@@ -105,7 +105,32 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
     setNewName(tpl.name);
     setNewDescription(tpl.description || '');
     setNewIcon(tpl.icon || 'shield');
-    setNewAssignments({ ...tpl.assignments });
+
+    // Normalize assignments to app.pk:
+    // 1. Strip known obsolete dummy keys (e.g. 'guest-wifi').
+    // 2. If a key is an app slug, resolve it to canonical app.pk so it doesn't duplicate app.pk.
+    // 3. Keep '*' wildcard and any unmatched keys for user visibility and removal.
+    const normalized: Record<string, string> = {};
+    Object.entries(tpl.assignments || {}).forEach(([key, role]) => {
+      if (key === 'guest-wifi') return;
+      if (key === '*') {
+        normalized['*'] = role;
+        return;
+      }
+      const appByPk = apps.find((a) => a.pk === key);
+      if (appByPk) {
+        normalized[appByPk.pk] = role;
+        return;
+      }
+      const appBySlug = apps.find((a) => a.slug && a.slug.toLowerCase() === key.toLowerCase());
+      if (appBySlug) {
+        normalized[appBySlug.pk] = role;
+        return;
+      }
+      normalized[key] = role;
+    });
+
+    setNewAssignments(normalized);
     setAppSearch('');
     setError(null);
     setSelectedTemplateForApply(null);
@@ -195,6 +220,46 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
   );
 
   const activeAssignmentCount = Object.keys(newAssignments).length;
+
+  // Identify any keys in newAssignments that don't match any known application (excluding wildcard)
+  const unmatchedKeys = Object.keys(newAssignments).filter(
+    (k) =>
+      k !== '*' &&
+      !apps.some((a) => a.pk === k || (a.slug && a.slug.toLowerCase() === k.toLowerCase()))
+  );
+
+  // Helper to extract unique display items for template cards, avoiding duplicates from slug vs pk
+  const getTemplateDisplayItems = (assignments: Record<string, string>) => {
+    const seenPks = new Set<string>();
+    const items: { key: string; name: string; role: string; isOrphan: boolean }[] = [];
+
+    Object.entries(assignments || {}).forEach(([key, role]) => {
+      if (key === '*') return;
+      if (key === 'guest-wifi') return; // Ignore legacy dummy key
+
+      const appByPk = apps.find((a) => a.pk === key);
+      if (appByPk) {
+        if (!seenPks.has(appByPk.pk)) {
+          seenPks.add(appByPk.pk);
+          items.push({ key: appByPk.pk, name: appByPk.name, role, isOrphan: false });
+        }
+        return;
+      }
+
+      const appBySlug = apps.find((a) => a.slug && a.slug.toLowerCase() === key.toLowerCase());
+      if (appBySlug) {
+        if (!seenPks.has(appBySlug.pk)) {
+          seenPks.add(appBySlug.pk);
+          items.push({ key: appBySlug.pk, name: appBySlug.name, role, isOrphan: false });
+        }
+        return;
+      }
+
+      items.push({ key, name: key, role, isOrphan: true });
+    });
+
+    return items;
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
@@ -404,6 +469,57 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
                   </div>
                 </div>
 
+                {/* Unmatched / Legacy Services Banner (if any orphaned keys exist) */}
+                {unmatchedKeys.length > 0 && (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/25 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-amber-300 font-semibold flex items-center gap-1.5">
+                        <span>⚠️ Unmatched Services ({unmatchedKeys.length})</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewAssignments((prev) => {
+                            const updated = { ...prev };
+                            unmatchedKeys.forEach((k) => delete updated[k]);
+                            return updated;
+                          });
+                        }}
+                        className="text-[11px] text-amber-400 hover:text-white underline cursor-pointer font-medium"
+                      >
+                        Remove All Unmatched
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      These services exist in this preset but do not match any currently known Authentik applications:
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {unmatchedKeys.map((k) => (
+                        <span
+                          key={k}
+                          className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded bg-[#16202e] text-amber-200 border border-amber-500/30 font-mono"
+                        >
+                          <span>{k} ({newAssignments[k]})</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewAssignments((prev) => {
+                                const updated = { ...prev };
+                                delete updated[k];
+                                return updated;
+                              });
+                            }}
+                            className="text-slate-400 hover:text-white hover:bg-slate-700 rounded p-0.5 transition-colors cursor-pointer"
+                            title={`Remove ${k}`}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Per-Application List */}
                 <div className="bg-[#111827] border border-[#25354b] rounded-xl p-2.5 max-h-52 overflow-y-auto space-y-1 divide-y divide-[#25354b]/50">
                   {filteredApps.length === 0 ? (
@@ -412,7 +528,7 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
                     </div>
                   ) : (
                     filteredApps.map((app) => {
-                      const currentRole = newAssignments[app.pk] || 'none';
+                      const currentRole = newAssignments[app.pk] || (app.slug ? newAssignments[app.slug] : undefined) || 'none';
                       return (
                         <div key={app.pk} className="flex items-center justify-between p-2">
                           <div className="flex items-center space-x-2 truncate">
@@ -434,9 +550,11 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
                                 onClick={() => {
                                   setNewAssignments((prev) => {
                                     const updated = { ...prev };
-                                    if (r === 'none') {
-                                      delete updated[app.pk];
-                                    } else {
+                                    delete updated[app.pk];
+                                    if (app.slug) {
+                                      delete updated[app.slug];
+                                    }
+                                    if (r !== 'none') {
                                       updated[app.pk] = r;
                                     }
                                     return updated;
@@ -561,8 +679,8 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
           {/* List of Templates */}
           <div className="space-y-3">
             {templates.map((tpl) => {
-              const assignmentKeys = Object.keys(tpl.assignments);
-              const isWildcard = tpl.assignments['*'];
+              const isWildcard = !!tpl.assignments['*'];
+              const displayItems = getTemplateDisplayItems(tpl.assignments);
               const isBeingEdited = editingTemplate?.id === tpl.id;
 
               return (
@@ -582,7 +700,7 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
                       <div className="flex items-center space-x-2">
                         <h4 className="text-sm font-semibold text-white">{tpl.name}</h4>
                         <span className="text-[10px] text-slate-400 bg-[#16202e] px-2 py-0.5 rounded border border-[#25354b]">
-                          {isWildcard ? 'All Applications' : `${assignmentKeys.length} Services`}
+                          {isWildcard ? 'All Applications' : `${displayItems.length} Services`}
                         </span>
                         {isBeingEdited && (
                           <span className="text-[10px] font-semibold text-orange-400 bg-orange-500/20 px-2 py-0.5 rounded border border-orange-500/30">
@@ -601,27 +719,24 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
                             * All Services ({tpl.assignments['*']})
                           </span>
                         ) : (
-                          assignmentKeys.slice(0, 5).map((appPk) => {
-                            const app = apps.find((a) => a.pk === appPk || a.slug === appPk);
-                            const appName = app ? app.name : appPk;
-                            const role = tpl.assignments[appPk];
-                            return (
-                              <span
-                                key={appPk}
-                                className={`text-[10px] px-2 py-0.5 rounded font-medium ${
-                                  role === 'admin'
-                                    ? 'bg-orange-500/10 text-[#fd7e14] border border-orange-500/20'
-                                    : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                                }`}
-                              >
-                                {appName} ({role})
-                              </span>
-                            );
-                          })
+                          displayItems.slice(0, 5).map((item) => (
+                            <span
+                              key={item.key}
+                              className={`text-[10px] px-2 py-0.5 rounded font-medium ${
+                                item.role === 'admin'
+                                  ? 'bg-orange-500/10 text-[#fd7e14] border border-orange-500/20'
+                                  : item.isOrphan
+                                  ? 'bg-amber-500/10 text-amber-300 border border-amber-500/20'
+                                  : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                              }`}
+                            >
+                              {item.name} ({item.role})
+                            </span>
+                          ))
                         )}
-                        {!isWildcard && assignmentKeys.length > 5 && (
+                        {!isWildcard && displayItems.length > 5 && (
                           <span className="text-[10px] text-slate-500 self-center">
-                            +{assignmentKeys.length - 5} more
+                            +{displayItems.length - 5} more
                           </span>
                         )}
                       </div>

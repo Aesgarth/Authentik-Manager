@@ -102,7 +102,7 @@ async def init_db():
                         "Guest / Visitor",
                         "Temporary leisure and visitor services (Bar Assistant, Guest Portal)",
                         "users",
-                        json.dumps({"bar-assistant": "member", "guest-wifi": "member"}),
+                        json.dumps({"bar-assistant": "member"}),
                         now
                     ),
                     (
@@ -117,6 +117,26 @@ async def init_db():
                     "INSERT INTO access_templates (name, description, icon, assignments, created_at) VALUES (?, ?, ?, ?, ?)",
                     defaults
                 )
+
+        # Migration: Purge legacy non-existent keys (e.g. 'guest-wifi') from existing access_templates
+        try:
+            async with db.execute("SELECT id, assignments FROM access_templates") as cursor:
+                rows = await cursor.fetchall()
+                for row in rows:
+                    t_id = row[0]
+                    raw_assign = row[1]
+                    try:
+                        assign_dict = json.loads(raw_assign) if raw_assign else {}
+                        if "guest-wifi" in assign_dict:
+                            del assign_dict["guest-wifi"]
+                            await db.execute(
+                                "UPDATE access_templates SET assignments = ? WHERE id = ?",
+                                (json.dumps(assign_dict), t_id)
+                            )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         await db.commit()
 
@@ -263,7 +283,8 @@ async def get_access_template(template_id: int) -> Optional[Dict[str, Any]]:
 async def save_access_template(name: str, description: Optional[str], icon: str, assignments: Dict[str, str]) -> Dict[str, Any]:
     db_path = get_db_path()
     now = datetime.now(timezone.utc).isoformat()
-    assign_json = json.dumps(assignments)
+    clean_assignments = {k: v for k, v in (assignments or {}).items() if k != "guest-wifi" and v in ("member", "admin", "user")}
+    assign_json = json.dumps(clean_assignments)
     async with aiosqlite.connect(db_path) as db:
         cursor = await db.execute(
             """
@@ -285,7 +306,7 @@ async def save_access_template(name: str, description: Optional[str], icon: str,
         "name": name,
         "description": description,
         "icon": icon,
-        "assignments": assignments,
+        "assignments": clean_assignments,
         "created_at": now,
     }
 
@@ -304,8 +325,9 @@ async def update_access_template(
     new_name = name.strip() if name is not None and name.strip() else existing["name"]
     new_desc = description if description is not None else existing.get("description", "")
     new_icon = icon.strip() if icon is not None and icon.strip() else existing.get("icon", "shield")
-    new_assignments = assignments if assignments is not None else existing.get("assignments", {})
-    assign_json = json.dumps(new_assignments)
+    raw_assignments = assignments if assignments is not None else existing.get("assignments", {})
+    clean_assignments = {k: v for k, v in (raw_assignments or {}).items() if k != "guest-wifi" and v in ("member", "admin", "user")}
+    assign_json = json.dumps(clean_assignments)
 
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
@@ -323,7 +345,7 @@ async def update_access_template(
         "name": new_name,
         "description": new_desc,
         "icon": new_icon,
-        "assignments": new_assignments,
+        "assignments": clean_assignments,
         "created_at": existing["created_at"],
     }
 

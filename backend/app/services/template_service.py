@@ -4,6 +4,7 @@ from app.database import (
     get_access_templates,
     get_access_template,
     save_access_template,
+    update_access_template,
     delete_access_template,
     record_audit_log
 )
@@ -13,6 +14,7 @@ from app.services.lease_service import lease_service
 from app.models import (
     AccessTemplateSchema,
     CreateAccessTemplateRequest,
+    UpdateAccessTemplateRequest,
     ApplyAccessTemplateRequest,
     CreateExpiringGrantRequest
 )
@@ -41,6 +43,28 @@ class TemplateService:
             status="SUCCESS"
         )
         return AccessTemplateSchema(**saved)
+
+    async def update_template(self, template_id: int, req: UpdateAccessTemplateRequest) -> AccessTemplateSchema:
+        updated = await update_access_template(
+            template_id=template_id,
+            name=req.name,
+            description=req.description,
+            icon=req.icon,
+            assignments=req.assignments
+        )
+        if not updated:
+            raise ValueError(f"Template #{template_id} not found")
+
+        await record_audit_log(
+            actor="Admin",
+            action="UPDATE_ACCESS_TEMPLATE",
+            target_type="ACCESS_TEMPLATE",
+            target_name=updated["name"],
+            target_id=str(template_id),
+            details=f"Updated preset '{updated['name']}' with {len(updated['assignments'])} assignments",
+            status="SUCCESS"
+        )
+        return AccessTemplateSchema(**updated)
 
     async def delete_template(self, template_id: int) -> bool:
         t = await get_access_template(template_id)

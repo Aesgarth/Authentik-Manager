@@ -98,6 +98,12 @@ class CreateAccessTemplateRequest(BaseModel):
     icon: Optional[str] = "shield"
     assignments: Dict[str, str]
 
+class UpdateAccessTemplateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    assignments: Optional[Dict[str, str]] = None
+
 class ApplyAccessTemplateRequest(BaseModel):
     template_id: int
     user_pk: int

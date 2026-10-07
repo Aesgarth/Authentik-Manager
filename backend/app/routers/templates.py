@@ -4,6 +4,7 @@ from app.auth import get_current_user
 from app.models import (
     AccessTemplateSchema,
     CreateAccessTemplateRequest,
+    UpdateAccessTemplateRequest,
     ApplyAccessTemplateRequest
 )
 from app.services.template_service import template_service
@@ -21,6 +22,19 @@ async def create_access_template(
 ):
     try:
         return await template_service.create_template(req)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.put("/{template_id}", response_model=AccessTemplateSchema)
+async def update_access_template(
+    template_id: int,
+    req: UpdateAccessTemplateRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        return await template_service.update_template(template_id, req)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

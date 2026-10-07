@@ -289,6 +289,44 @@ async def save_access_template(name: str, description: Optional[str], icon: str,
         "created_at": now,
     }
 
+async def update_access_template(
+    template_id: int,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    icon: Optional[str] = None,
+    assignments: Optional[Dict[str, str]] = None
+) -> Optional[Dict[str, Any]]:
+    db_path = get_db_path()
+    existing = await get_access_template(template_id)
+    if not existing:
+        return None
+
+    new_name = name.strip() if name is not None and name.strip() else existing["name"]
+    new_desc = description if description is not None else existing.get("description", "")
+    new_icon = icon.strip() if icon is not None and icon.strip() else existing.get("icon", "shield")
+    new_assignments = assignments if assignments is not None else existing.get("assignments", {})
+    assign_json = json.dumps(new_assignments)
+
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            UPDATE access_templates
+            SET name = ?, description = ?, icon = ?, assignments = ?
+            WHERE id = ?
+            """,
+            (new_name, new_desc, new_icon, assign_json, template_id)
+        )
+        await db.commit()
+
+    return {
+        "id": template_id,
+        "name": new_name,
+        "description": new_desc,
+        "icon": new_icon,
+        "assignments": new_assignments,
+        "created_at": existing["created_at"],
+    }
+
 async def delete_access_template(template_id: int) -> bool:
     db_path = get_db_path()
     async with aiosqlite.connect(db_path) as db:

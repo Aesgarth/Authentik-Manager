@@ -270,6 +270,24 @@ export const api = {
     return res.json();
   },
 
+  async updateTemplate(templateId: number, params: {
+    name?: string;
+    description?: string;
+    icon?: string;
+    assignments?: Record<string, string>;
+  }): Promise<AccessTemplate> {
+    const res = await fetch(`${API_BASE}/templates/${templateId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to update access template' }));
+      throw new Error(err.detail || 'Failed to update access template');
+    }
+    return res.json();
+  },
+
   async deleteTemplate(templateId: number): Promise<void> {
     const res = await fetch(`${API_BASE}/templates/${templateId}`, { method: 'DELETE' });
     if (!res.ok) throw new Error('Failed to delete access template');

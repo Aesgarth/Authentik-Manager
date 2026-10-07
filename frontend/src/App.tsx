@@ -338,6 +338,22 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleUpdateTemplate = async (templateId: number, params: {
+    name?: string;
+    description?: string;
+    icon?: string;
+    assignments?: Record<string, string>;
+  }) => {
+    try {
+      const updated = await api.updateTemplate(templateId, params);
+      setTemplates((prev) => prev.map((t) => (t.id === templateId ? updated : t)));
+      showToast(`Updated role preset "${updated.name}"`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update role preset', 'error');
+      throw err;
+    }
+  };
+
   const handleDeleteTemplate = async (templateId: number) => {
     try {
       await api.deleteTemplate(templateId);
@@ -855,6 +871,7 @@ export const App: React.FC = () => {
             apps={matrixData.apps}
             users={matrixData.users}
             onCreateTemplate={handleCreateTemplate}
+            onUpdateTemplate={handleUpdateTemplate}
             onDeleteTemplate={handleDeleteTemplate}
             onApplyTemplate={handleApplyTemplate}
             loading={loading}

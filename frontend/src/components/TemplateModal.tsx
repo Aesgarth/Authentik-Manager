@@ -9,7 +9,9 @@ import {
   Plus, 
   Trash2, 
   ArrowRight,
-  Sparkles
+  Sparkles,
+  Pencil,
+  Search
 } from 'lucide-react';
 import { AccessTemplate, Application, User } from '../types';
 
@@ -24,6 +26,12 @@ interface TemplateModalProps {
     description?: string;
     icon?: string;
     assignments: Record<string, string>;
+  }) => Promise<void>;
+  onUpdateTemplate: (templateId: number, params: {
+    name?: string;
+    description?: string;
+    icon?: string;
+    assignments?: Record<string, string>;
   }) => Promise<void>;
   onDeleteTemplate: (templateId: number) => Promise<void>;
   onApplyTemplate: (templateId: number, params: {
@@ -41,23 +49,28 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
   apps,
   users,
   onCreateTemplate,
+  onUpdateTemplate,
   onDeleteTemplate,
   onApplyTemplate,
   loading,
 }) => {
   const [isCreating, setIsCreating] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<AccessTemplate | null>(null);
   const [selectedTemplateForApply, setSelectedTemplateForApply] = useState<AccessTemplate | null>(null);
   const [selectedUserPk, setSelectedUserPk] = useState<number | null>(null);
   const [durationHours, setDurationHours] = useState<number | undefined>(undefined);
 
-  // New Template Form State
+  // Template Form State (used for both create and edit)
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newIcon, setNewIcon] = useState('shield');
   const [newAssignments, setNewAssignments] = useState<Record<string, string>>({});
+  const [appSearch, setAppSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
+
+  const isFormOpen = isCreating || editingTemplate !== null;
 
   const getTemplateIcon = (iconName: string) => {
     switch (iconName) {
@@ -74,7 +87,53 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
     }
   };
 
-  const handleCreateSubmit = async (e: React.FormEvent) => {
+  const handleStartCreate = () => {
+    setEditingTemplate(null);
+    setIsCreating(true);
+    setNewName('');
+    setNewDescription('');
+    setNewIcon('shield');
+    setNewAssignments({});
+    setAppSearch('');
+    setError(null);
+    setSelectedTemplateForApply(null);
+  };
+
+  const handleStartEdit = (tpl: AccessTemplate) => {
+    setIsCreating(false);
+    setEditingTemplate(tpl);
+    setNewName(tpl.name);
+    setNewDescription(tpl.description || '');
+    setNewIcon(tpl.icon || 'shield');
+    setNewAssignments({ ...tpl.assignments });
+    setAppSearch('');
+    setError(null);
+    setSelectedTemplateForApply(null);
+  };
+
+  const handleCancelForm = () => {
+    setIsCreating(false);
+    setEditingTemplate(null);
+    setNewName('');
+    setNewDescription('');
+    setNewAssignments({});
+    setAppSearch('');
+    setError(null);
+  };
+
+  const handleSetAllRoles = (role: 'member' | 'admin' | 'none') => {
+    if (role === 'none') {
+      setNewAssignments({});
+      return;
+    }
+    const updated: Record<string, string> = {};
+    apps.forEach((a) => {
+      updated[a.pk] = role;
+    });
+    setNewAssignments(updated);
+  };
+
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim()) {
       setError('Please provide a name for the access preset');
@@ -87,18 +146,24 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
 
     try {
       setError(null);
-      await onCreateTemplate({
-        name: newName.trim(),
-        description: newDescription.trim() || undefined,
-        icon: newIcon,
-        assignments: newAssignments,
-      });
-      setIsCreating(false);
-      setNewName('');
-      setNewDescription('');
-      setNewAssignments({});
+      if (editingTemplate) {
+        await onUpdateTemplate(editingTemplate.id, {
+          name: newName.trim(),
+          description: newDescription.trim() || undefined,
+          icon: newIcon,
+          assignments: newAssignments,
+        });
+      } else {
+        await onCreateTemplate({
+          name: newName.trim(),
+          description: newDescription.trim() || undefined,
+          icon: newIcon,
+          assignments: newAssignments,
+        });
+      }
+      handleCancelForm();
     } catch (err: any) {
-      setError(err.message || 'Failed to create template');
+      setError(err.message || (editingTemplate ? 'Failed to update preset' : 'Failed to create preset'));
     }
   };
 
@@ -123,6 +188,14 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
     }
   };
 
+  const filteredApps = apps.filter(
+    (a) =>
+      a.name.toLowerCase().includes(appSearch.toLowerCase()) ||
+      (a.slug && a.slug.toLowerCase().includes(appSearch.toLowerCase()))
+  );
+
+  const activeAssignmentCount = Object.keys(newAssignments).length;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
       <div className="bg-[#111827] border border-[#25354b] rounded-2xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -146,18 +219,20 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
             </div>
           </div>
           <div className="flex items-center space-x-2">
-            {!isCreating && (
+            {!isFormOpen && (
               <button
-                onClick={() => setIsCreating(true)}
-                className="flex items-center space-x-1.5 bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-sm transition-colors"
+                type="button"
+                onClick={handleStartCreate}
+                className="flex items-center space-x-1.5 bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-sm transition-colors cursor-pointer"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>New Preset</span>
               </button>
             )}
             <button
+              type="button"
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-white hover:bg-[#1e2c3f] rounded-lg transition-colors"
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-[#1e2c3f] rounded-lg transition-colors cursor-pointer"
             >
               <X className="h-5 w-5" />
             </button>
@@ -173,17 +248,20 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
             </div>
           )}
 
-          {/* Create Preset Form */}
-          {isCreating ? (
-            <form onSubmit={handleCreateSubmit} className="space-y-4 bg-[#0b0f17] border border-[#25354b] p-4 rounded-xl">
+          {/* Create or Edit Preset Form */}
+          {isFormOpen && (
+            <form onSubmit={handleFormSubmit} className="space-y-4 bg-[#0b0f17] border border-[#25354b] p-4 rounded-xl animate-in fade-in slide-in-from-top-2 duration-200">
               <div className="flex items-center justify-between pb-2 border-b border-[#25354b]">
-                <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                  Create Access Preset
-                </h4>
+                <div className="flex items-center space-x-2">
+                  {editingTemplate ? <Pencil className="h-4 w-4 text-[#fd7e14]" /> : <Plus className="h-4 w-4 text-[#fd7e14]" />}
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                    {editingTemplate ? `Edit Access Preset: ${editingTemplate.name}` : 'Create Access Preset'}
+                  </h4>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setIsCreating(false)}
-                  className="text-xs text-slate-400 hover:text-white"
+                  onClick={handleCancelForm}
+                  className="text-xs text-slate-400 hover:text-white cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -201,6 +279,7 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
                     onChange={(e) => setNewName(e.target.value)}
                     className="w-full bg-[#111827] border border-[#25354b] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#fd7e14]"
                     required
+                    autoFocus
                   />
                 </div>
 
@@ -233,80 +312,176 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-2">
-                  Service Role Assignments:
-                </label>
-                <div className="bg-[#111827] border border-[#25354b] rounded-xl p-2.5 max-h-48 overflow-y-auto space-y-1 divide-y divide-[#25354b]/50">
-                  {apps.map((app) => {
-                    const currentRole = newAssignments[app.pk] || 'none';
-                    return (
-                      <div key={app.pk} className="flex items-center justify-between p-2">
-                        <div className="flex items-center space-x-2">
-                          {app.meta_icon ? (
-                            <img src={app.meta_icon} alt={app.name} className="h-5 w-5 object-contain" />
-                          ) : (
-                            <div className="h-5 w-5 rounded bg-[#1e2c3f] text-[#fd7e14] text-[9px] flex items-center justify-center font-bold">
-                              {app.name.substring(0, 2).toUpperCase()}
-                            </div>
-                          )}
-                          <span className="text-xs text-slate-200 font-medium">{app.name}</span>
-                        </div>
+              {/* Service Role Assignments Box */}
+              <div className="space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <label className="block text-xs font-semibold text-slate-300">
+                    Service Role Assignments ({activeAssignmentCount} configured):
+                  </label>
+                  
+                  {/* Quick Batch Selectors */}
+                  <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                    <span className="text-[10px] text-slate-500 mr-1">Batch:</span>
+                    <button
+                      type="button"
+                      onClick={() => handleSetAllRoles('member')}
+                      className="px-2 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/25 text-[10px] font-medium transition-colors cursor-pointer"
+                    >
+                      All Member
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetAllRoles('admin')}
+                      className="px-2 py-0.5 rounded bg-orange-500/10 hover:bg-orange-500/20 text-orange-300 border border-orange-500/25 text-[10px] font-medium transition-colors cursor-pointer"
+                    >
+                      All Admin
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetAllRoles('none')}
+                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-[10px] font-medium transition-colors cursor-pointer"
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                </div>
 
-                        <div className="flex items-center space-x-1">
-                          {(['none', 'member', 'admin'] as const).map((r) => (
-                            <button
-                              key={r}
-                              type="button"
-                              onClick={() => {
-                                setNewAssignments((prev) => {
-                                  const updated = { ...prev };
-                                  if (r === 'none') {
-                                    delete updated[app.pk];
-                                  } else {
-                                    updated[app.pk] = r;
-                                  }
-                                  return updated;
-                                });
-                              }}
-                              className={`px-2 py-0.5 rounded text-[11px] font-medium capitalize transition-all ${
-                                currentRole === r
-                                  ? r === 'admin'
-                                    ? 'bg-orange-500/20 text-[#fd7e14] border border-orange-500/30'
-                                    : r === 'member'
-                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                                    : 'bg-[#1e2c3f] text-slate-300 border border-[#2c3f58]'
-                                  : 'text-slate-500 hover:text-slate-300'
-                              }`}
-                            >
-                              {r}
-                            </button>
-                          ))}
+                {/* Filter / Search Bar if many apps */}
+                {apps.length > 5 && (
+                  <div className="relative">
+                    <Search className="h-3.5 w-3.5 text-slate-500 absolute left-3 top-2.5" />
+                    <input
+                      type="text"
+                      placeholder="Filter applications by name..."
+                      value={appSearch}
+                      onChange={(e) => setAppSearch(e.target.value)}
+                      className="w-full bg-[#111827] border border-[#25354b] rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#fd7e14]"
+                    />
+                  </div>
+                )}
+
+                {/* Wildcard Rule Banner (Optional Master Rule) */}
+                <div className="flex items-center justify-between p-2.5 bg-orange-500/10 border border-orange-500/20 rounded-xl">
+                  <div className="flex items-center space-x-2">
+                    <Sparkles className="h-4 w-4 text-[#fd7e14] shrink-0" />
+                    <div>
+                      <span className="text-xs text-white font-semibold">Master Rule: All Services (*)</span>
+                      <p className="text-[10px] text-slate-400">Defaults all current & future applications unless overridden below.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-1 shrink-0">
+                    {(['none', 'member', 'admin'] as const).map((r) => {
+                      const isCurrent = (newAssignments['*'] || 'none') === r;
+                      return (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() => {
+                            setNewAssignments((prev) => {
+                              const updated = { ...prev };
+                              if (r === 'none') {
+                                delete updated['*'];
+                              } else {
+                                updated['*'] = r;
+                              }
+                              return updated;
+                            });
+                          }}
+                          className={`px-2 py-0.5 rounded text-[11px] font-medium capitalize transition-all cursor-pointer ${
+                            isCurrent
+                              ? r === 'admin'
+                                ? 'bg-orange-500 text-white font-bold shadow'
+                                : r === 'member'
+                                ? 'bg-emerald-500 text-white font-bold shadow'
+                                : 'bg-slate-700 text-white'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {r}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Per-Application List */}
+                <div className="bg-[#111827] border border-[#25354b] rounded-xl p-2.5 max-h-52 overflow-y-auto space-y-1 divide-y divide-[#25354b]/50">
+                  {filteredApps.length === 0 ? (
+                    <div className="text-center py-4 text-xs text-slate-500">
+                      No applications match "{appSearch}"
+                    </div>
+                  ) : (
+                    filteredApps.map((app) => {
+                      const currentRole = newAssignments[app.pk] || 'none';
+                      return (
+                        <div key={app.pk} className="flex items-center justify-between p-2">
+                          <div className="flex items-center space-x-2 truncate">
+                            {app.meta_icon ? (
+                              <img src={app.meta_icon} alt={app.name} className="h-5 w-5 object-contain shrink-0" />
+                            ) : (
+                              <div className="h-5 w-5 rounded bg-[#1e2c3f] text-[#fd7e14] text-[9px] flex items-center justify-center font-bold shrink-0">
+                                {app.name.substring(0, 2).toUpperCase()}
+                              </div>
+                            )}
+                            <span className="text-xs text-slate-200 font-medium truncate">{app.name}</span>
+                          </div>
+
+                          <div className="flex items-center space-x-1 shrink-0">
+                            {(['none', 'member', 'admin'] as const).map((r) => (
+                              <button
+                                key={r}
+                                type="button"
+                                onClick={() => {
+                                  setNewAssignments((prev) => {
+                                    const updated = { ...prev };
+                                    if (r === 'none') {
+                                      delete updated[app.pk];
+                                    } else {
+                                      updated[app.pk] = r;
+                                    }
+                                    return updated;
+                                  });
+                                }}
+                                className={`px-2 py-0.5 rounded text-[11px] font-medium capitalize transition-all cursor-pointer ${
+                                  currentRole === r
+                                    ? r === 'admin'
+                                      ? 'bg-orange-500/20 text-[#fd7e14] border border-orange-500/30'
+                                      : r === 'member'
+                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                      : 'bg-[#1e2c3f] text-slate-300 border border-[#2c3f58]'
+                                    : 'text-slate-500 hover:text-slate-300'
+                                }`}
+                              >
+                                {r}
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </div>
               </div>
 
-              <div className="flex justify-end space-x-2 pt-2">
+              <div className="flex justify-end space-x-2 pt-2 border-t border-[#25354b]">
                 <button
                   type="button"
-                  onClick={() => setIsCreating(false)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white"
+                  onClick={handleCancelForm}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={loading}
-                  className="bg-[#fd7e14] hover:bg-[#ea6c0a] text-white text-xs font-semibold px-4 py-1.5 rounded-lg shadow-sm transition-colors"
+                  className="bg-[#fd7e14] hover:bg-[#ea6c0a] disabled:opacity-50 text-white text-xs font-semibold px-4 py-1.5 rounded-lg shadow-sm transition-colors cursor-pointer flex items-center gap-1.5"
                 >
-                  Save Preset
+                  {editingTemplate && <Pencil className="h-3 w-3" />}
+                  <span>{editingTemplate ? 'Save Changes' : 'Save Preset'}</span>
                 </button>
               </div>
             </form>
-          ) : null}
+          )}
 
           {/* Quick Apply Panel (if a template is selected) */}
           {selectedTemplateForApply && (
@@ -319,8 +494,9 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
                   </h4>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setSelectedTemplateForApply(null)}
-                  className="text-slate-400 hover:text-white text-xs"
+                  className="text-slate-400 hover:text-white text-xs cursor-pointer"
                 >
                   ✕
                 </button>
@@ -372,7 +548,7 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
                   <button
                     type="submit"
                     disabled={loading || !selectedUserPk}
-                    className="flex items-center space-x-1.5 bg-[#fd7e14] hover:bg-[#ea6c0a] disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-sm transition-colors"
+                    className="flex items-center space-x-1.5 bg-[#fd7e14] hover:bg-[#ea6c0a] disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-sm transition-colors cursor-pointer"
                   >
                     <span>Execute Batch Assignment</span>
                     <ArrowRight className="h-3.5 w-3.5" />
@@ -387,11 +563,16 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
             {templates.map((tpl) => {
               const assignmentKeys = Object.keys(tpl.assignments);
               const isWildcard = tpl.assignments['*'];
+              const isBeingEdited = editingTemplate?.id === tpl.id;
 
               return (
                 <div
                   key={tpl.id}
-                  className="bg-[#0b0f17] border border-[#25354b] hover:border-[#2c3f58] rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-colors"
+                  className={`rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all ${
+                    isBeingEdited
+                      ? 'bg-orange-500/10 border-2 border-orange-500/70 shadow-lg'
+                      : 'bg-[#0b0f17] border border-[#25354b] hover:border-[#2c3f58]'
+                  }`}
                 >
                   <div className="flex items-start space-x-3.5">
                     <div className="h-10 w-10 rounded-xl bg-[#16202e] border border-[#25354b] flex items-center justify-center shrink-0">
@@ -403,6 +584,11 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
                         <span className="text-[10px] text-slate-400 bg-[#16202e] px-2 py-0.5 rounded border border-[#25354b]">
                           {isWildcard ? 'All Applications' : `${assignmentKeys.length} Services`}
                         </span>
+                        {isBeingEdited && (
+                          <span className="text-[10px] font-semibold text-orange-400 bg-orange-500/20 px-2 py-0.5 rounded border border-orange-500/30">
+                            Editing
+                          </span>
+                        )}
                       </div>
                       {tpl.description && (
                         <p className="text-xs text-slate-400 mt-0.5">{tpl.description}</p>
@@ -442,19 +628,38 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center space-x-2 self-end sm:self-center shrink-0">
+                  <div className="flex items-center space-x-1.5 self-end sm:self-center shrink-0">
+                    {/* Edit Preset Button */}
                     <button
-                      onClick={() => setSelectedTemplateForApply(tpl)}
-                      className="flex items-center space-x-1.5 bg-[#16202e] hover:bg-[#fd7e14] text-slate-200 hover:text-white text-xs px-3 py-1.5 rounded-lg border border-[#25354b] hover:border-[#fd7e14] transition-all"
+                      type="button"
+                      onClick={() => handleStartEdit(tpl)}
+                      className={`flex items-center space-x-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer ${
+                        isBeingEdited
+                          ? 'bg-orange-500 text-white border-orange-500 shadow'
+                          : 'bg-[#16202e] hover:bg-slate-700 text-slate-200 hover:text-white border-[#25354b] hover:border-slate-500'
+                      }`}
+                      title="Edit this preset's name, icon, and application permissions"
                     >
-                      <Users className="h-3.5 w-3.5" />
-                      <span>Apply to User...</span>
+                      <Pencil className="h-3.5 w-3.5 text-[#fd7e14]" />
+                      <span>Edit</span>
                     </button>
 
+                    {/* Apply to User Button */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTemplateForApply(tpl)}
+                      className="flex items-center space-x-1.5 bg-[#16202e] hover:bg-[#fd7e14] text-slate-200 hover:text-white text-xs px-3 py-1.5 rounded-lg border border-[#25354b] hover:border-[#fd7e14] transition-all cursor-pointer"
+                    >
+                      <Users className="h-3.5 w-3.5" />
+                      <span>Apply...</span>
+                    </button>
+
+                    {/* Delete Custom Preset Button */}
                     {tpl.id > 3 && (
                       <button
+                        type="button"
                         onClick={() => onDeleteTemplate(tpl.id)}
-                        className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg transition-colors"
+                        className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
                         title="Delete custom preset"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -471,8 +676,9 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
         {/* Footer */}
         <div className="p-4 border-t border-[#25354b] bg-[#16202e] flex justify-end">
           <button
+            type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-xs font-medium text-slate-300 hover:bg-[#1e2c3f] transition-colors"
+            className="px-4 py-2 rounded-lg text-xs font-medium text-slate-300 hover:bg-[#1e2c3f] transition-colors cursor-pointer"
           >
             Close
           </button>

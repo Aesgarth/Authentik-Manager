@@ -78,6 +78,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [authMethod, setAuthMethod] = useState<'none' | 'password' | 'forward_auth' | 'oidc'>('none');
   const [adminPassword, setAdminPassword] = useState('');
   const [showAdminPassword, setShowAdminPassword] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [adminPasswordConfigured, setAdminPasswordConfigured] = useState(false);
   const [appUrl, setAppUrl] = useState('');
   const [oidcClientId, setOidcClientId] = useState('');
@@ -253,6 +255,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         payload.admin_password = adminPassword.trim();
       }
 
+      if (currentPassword.trim()) {
+        payload.current_password = currentPassword.trim();
+      }
+
       if (oidcClientSecret.trim()) {
         payload.oidc_client_secret = oidcClientSecret.trim();
       }
@@ -272,6 +278,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       setOidcClientSecretConfigured(updated.oidc_client_secret_configured);
       setOidcClientSecret('');
       setAdminPassword('');
+      setCurrentPassword('');
       setAdminPasswordConfigured(updated.admin_password_configured);
       setOidcConfigured(updated.oidc_configured);
 
@@ -401,7 +408,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           {authMethod === 'password' && (
             <div className="p-4 rounded-xl bg-[#0b0f17] border border-[#25354b] space-y-2">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-medium text-slate-300">Master Admin Password</label>
+                <label className="text-xs font-medium text-slate-300">
+                  {adminPasswordConfigured ? 'New Administrator Password' : 'Set Administrator Password'}
+                </label>
                 {adminPasswordConfigured && (
                   <span className="text-[10px] text-emerald-400 font-mono">Password configured</span>
                 )}
@@ -411,7 +420,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   type={showAdminPassword ? 'text' : 'password'}
                   value={adminPassword}
                   onChange={(e) => setAdminPassword(e.target.value)}
-                  placeholder={adminPasswordConfigured ? 'Enter new password to change...' : 'Set administrator password...'}
+                  placeholder={adminPasswordConfigured ? 'Leave blank to keep existing password...' : 'Set administrator password...'}
                   className="w-full bg-[#111827] border border-[#25354b] rounded-xl pl-3.5 pr-10 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14]"
                 />
                 <button
@@ -422,6 +431,35 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   {showAdminPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Current Password verification gate if password is configured */}
+          {adminPasswordConfigured && (
+            <div className="p-4 rounded-xl bg-[#0b0f17] border border-[#25354b] space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-slate-300">Current Administrator Password</label>
+                <span className="text-[10px] text-amber-400/90 font-mono">Security Gate</span>
+              </div>
+              <div className="relative">
+                <input
+                  type={showCurrentPassword ? 'text' : 'password'}
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="Enter current administrator password to authorize security changes..."
+                  className="w-full bg-[#111827] border border-[#25354b] rounded-xl pl-3.5 pr-10 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#fd7e14]"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200"
+                >
+                  {showCurrentPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-500">
+                Required when changing administrator password, auth method, or Authentik connection settings.
+              </p>
             </div>
           )}
 

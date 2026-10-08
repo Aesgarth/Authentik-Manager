@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import aiosqlite
 from datetime import datetime, timezone
@@ -76,6 +77,16 @@ async def init_db():
                 is_secret INTEGER DEFAULT 0,
                 updated_at TEXT NOT NULL
             )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS revoked_tokens (
+                jti TEXT PRIMARY KEY,
+                revoked_at TEXT NOT NULL,
+                expires_at REAL NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens (expires_at)
         """)
         
         # Safely migrate existing databases if columns do not exist
@@ -390,3 +401,39 @@ async def set_app_setting(key: str, value: str, is_secret: bool = False):
             (key, value, 1 if is_secret else 0, now)
         )
         await db.commit()
+
+# --- Revoked JWT Sessions ---
+
+async def record_revoked_token(jti: str, expires_at: float):
+    """Persists a revoked JWT token identifier with its natural expiration timestamp."""
+    if not jti:
+        return
+    db_path = get_db_path()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    now_ts = time.time()
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO revoked_tokens (jti, revoked_at, expires_at)
+            VALUES (?, ?, ?)
+            """,
+            (str(jti), now_iso, float(expires_at))
+        )
+        # Periodically purge entries that have naturally expired past the JWT lifetime
+        await db.execute("DELETE FROM revoked_tokens WHERE expires_at < ?", (now_ts,))
+        await db.commit()
+
+async def get_all_active_revoked_jtis() -> Dict[str, float]:
+    """Retrieves all active unexpired revoked token JTIs from the database."""
+    db_path = get_db_path()
+    now_ts = time.time()
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            async with db.execute(
+                "SELECT jti, expires_at FROM revoked_tokens WHERE expires_at >= ?",
+                (now_ts,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return {row[0]: float(row[1]) for row in rows}
+    except Exception:
+        return {}

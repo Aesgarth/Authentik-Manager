@@ -205,21 +205,30 @@ class SettingsService:
                                 os.chmod(pw_file, 0o600)
                             except Exception:
                                 pass
-                        logger.warning(
+                        import sys
+                        sys.stdout.write(
                             "\n" + "=" * 65 + "\n"
                             + "SECURITY NOTICE: No custom ADMIN_PASSWORD was configured in environment.\n"
                             + "A secure random one-time administrator password has been generated:\n"
                             + f"    PASSWORD: {one_time_pw}\n"
-                            + f"Saved to: {pw_file}\n"
+                            + f"Saved to: {pw_file} (mode 0600; will be deleted on first login or password change)\n"
                             + "Please sign in and change your administrator password in Settings.\n"
-                            + "=" * 65
+                            + "=" * 65 + "\n"
                         )
+                        sys.stdout.flush()
                     except Exception as e:
                         logger.warning(f"Could not persist initial admin password: {e}")
                 else:
                     hashed = hash_password(configured_pw)
                     await set_app_setting("admin_password_hash", hashed, is_secret=True)
                     self._admin_password_hash = hashed
+
+            # Sync active revoked tokens from persistent database
+            from app.database import get_all_active_revoked_jtis
+            from app.security import sync_revoked_jtis
+            active_jtis = await get_all_active_revoked_jtis()
+            if active_jtis:
+                sync_revoked_jtis(active_jtis)
 
             # Sync whatsapp_service instance
             from app.services.whatsapp_service import whatsapp_service
@@ -300,13 +309,26 @@ class SettingsService:
     async def update_settings(self, req: UpdateSettingsRequest, actor: str = "Admin") -> SettingsResponse:
         updated_keys = []
 
-        # Check if sensitive security parameters are being changed
-        is_security_change = (
-            req.admin_password is not None
-            or req.auth_method is not None
-            or req.authentik_url is not None
-            or (req.authentik_token is not None and not req.authentik_token.startswith("••"))
-        )
+        # Check if sensitive security parameters are actually being modified to new values
+        is_security_change = False
+
+        if req.admin_password and req.admin_password.strip():
+            is_security_change = True
+
+        if req.auth_method is not None:
+            clean_am = req.auth_method.strip().lower()
+            if clean_am in ("none", "password", "oidc", "forward_auth") and clean_am != settings.AUTH_METHOD.lower():
+                is_security_change = True
+
+        if req.authentik_url is not None:
+            clean_url = req.authentik_url.strip().rstrip("/")
+            if clean_url and clean_url != settings.AUTHENTIK_URL.rstrip("/"):
+                is_security_change = True
+
+        if req.authentik_token is not None:
+            clean_token = req.authentik_token.strip()
+            if clean_token and not clean_token.startswith("••") and clean_token != settings.AUTHENTIK_TOKEN:
+                is_security_change = True
 
         if is_security_change and self.is_password_configured() and settings.AUTH_METHOD == "password":
             if not req.current_password or not self.verify_admin_password(req.current_password):
@@ -449,6 +471,16 @@ class SettingsService:
                 self._admin_password_hash = hashed
                 settings.ADMIN_PASSWORD = clean_pw
                 updated_keys.append("admin_password")
+
+                # Remove one-time temporary password file if present
+                data_dir = os.path.dirname(settings.SQLITE_DB_PATH) or "data"
+                pw_file = os.path.join(data_dir, ".initial_admin_password")
+                if os.path.exists(pw_file):
+                    try:
+                        os.remove(pw_file)
+                        logger.info("Removed temporary initial admin password file after password update.")
+                    except Exception as e:
+                        logger.warning(f"Failed to remove {pw_file}: {e}")
 
         if req.webhook_secret is not None:
             clean_ws = req.webhook_secret.strip()

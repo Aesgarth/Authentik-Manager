@@ -199,6 +199,7 @@ export interface UpdateSettingsPayload {
   // OIDC & Security Settings
   auth_method?: string;
   admin_password?: string;
+  current_password?: string;
   webhook_secret?: string;
   app_url?: string;
   oidc_client_id?: string;

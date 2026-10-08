@@ -85,6 +85,17 @@ async def login_password(req: LoginRequest, request: Request, response: Response
 
     reset_login_attempts(client_ip)
 
+    # Delete temporary initial admin password file once user has logged in
+    import os
+    data_dir = os.path.dirname(settings.SQLITE_DB_PATH) or "data"
+    pw_file = os.path.join(data_dir, ".initial_admin_password")
+    if os.path.exists(pw_file):
+        try:
+            os.remove(pw_file)
+            logger.info("Removed temporary initial admin password file after successful login.")
+        except Exception as e:
+            logger.warning(f"Failed to remove {pw_file}: {e}")
+
     token = create_access_token({"sub": "admin", "name": "Administrator", "is_admin": True})
     secure_cookie = is_secure_request(request)
     response.set_cookie(
@@ -115,7 +126,14 @@ async def logout(request: Request, response: Response):
     if token:
         payload = decode_access_token(token)
         if payload and payload.get("jti"):
-            revoke_jwt_jti(payload["jti"])
+            jti = payload["jti"]
+            exp = float(payload.get("exp", 0))
+            revoke_jwt_jti(jti, expires_at=exp if exp else None)
+            try:
+                from app.database import record_revoked_token
+                await record_revoked_token(jti, exp)
+            except Exception as e:
+                logger.warning(f"Could not persist revoked token {jti}: {e}")
     response.delete_cookie("session_token")
     return {"status": "logged_out"}
 

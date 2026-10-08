@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     # Forward-Auth Header Options (when behind Authentik Proxy Outpost)
     FORWARD_AUTH_HEADER_USER: str = "x-authentik-username"
     FORWARD_AUTH_HEADER_GROUPS: str = "x-authentik-groups"
-    FORWARD_AUTH_TRUSTED_PROXIES: str = "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    FORWARD_AUTH_TRUSTED_PROXIES: str = "127.0.0.1,::1"
 
     # WhatsApp Integration (via Baileys Microservice)
     WHATSAPP_ENABLED: bool = True

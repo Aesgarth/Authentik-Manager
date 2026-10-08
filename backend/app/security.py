@@ -100,6 +100,11 @@ def resolve_secret_key(configured_key: str, data_dir: str = "data") -> str:
     key_file = os.path.join(data_dir, ".secret_key")
     try:
         if os.path.exists(key_file):
+            if hasattr(os, "chmod"):
+                try:
+                    os.chmod(key_file, 0o600)
+                except Exception:
+                    pass
             with open(key_file, "r", encoding="utf-8") as f:
                 saved = f.read().strip()
                 if len(saved) >= 32 and not is_placeholder_secret_key(saved):
@@ -113,51 +118,91 @@ def resolve_secret_key(configured_key: str, data_dir: str = "data") -> str:
         os.makedirs(data_dir, exist_ok=True)
         with open(key_file, "w", encoding="utf-8") as f:
             f.write(generated)
-        logger.info(f"Generated new secure persistent secret key in {key_file}")
+        if hasattr(os, "chmod"):
+            try:
+                os.chmod(key_file, 0o600)
+            except Exception:
+                pass
+        logger.info(f"Generated new secure persistent secret key in {key_file} (mode 0600)")
     except Exception as e:
         logger.warning(f"Could not persist secret key to {key_file}: {e}")
 
     return generated
 
-# --- In-Memory Rate Limiting for Login Attempts ---
+# --- Rate Limiting for Login Attempts (Per-IP and Global Lockout) ---
 
-_login_attempts: dict[str, list[float]] = {}
-MAX_LOGIN_ATTEMPTS = 5
+_ip_login_attempts: dict[str, list[float]] = {}
+_global_login_attempts: list[float] = []
+
+MAX_IP_LOGIN_ATTEMPTS = 5
+MAX_GLOBAL_LOGIN_ATTEMPTS = 20
 LOGIN_WINDOW_SECONDS = 300  # 5 minutes
 
 def is_login_rate_limited(client_ip: str) -> bool:
-    """Checks if client_ip has exceeded max failed login attempts."""
+    """
+    Checks if login attempts are throttled:
+    1. Per-IP: checks if client_ip has exceeded MAX_IP_LOGIN_ATTEMPTS (5) in 5 minutes.
+    2. Global: checks if total failed attempts across all IPs exceed MAX_GLOBAL_LOGIN_ATTEMPTS (20) in 5 minutes.
+       Prevents brute-forcing the single admin password by rotating X-Forwarded-For or client IPs.
+    """
     now = time.time()
-    attempts = _login_attempts.get(client_ip, [])
-    active_attempts = [t for t in attempts if now - t < LOGIN_WINDOW_SECONDS]
-    _login_attempts[client_ip] = active_attempts
-    return len(active_attempts) >= MAX_LOGIN_ATTEMPTS
+
+    # Clean and check per-IP attempts
+    ip_attempts = _ip_login_attempts.get(client_ip, [])
+    active_ip = [t for t in ip_attempts if now - t < LOGIN_WINDOW_SECONDS]
+    _ip_login_attempts[client_ip] = active_ip
+    if len(active_ip) >= MAX_IP_LOGIN_ATTEMPTS:
+        return True
+
+    # Clean and check global attempts
+    global _global_login_attempts
+    _global_login_attempts = [t for t in _global_login_attempts if now - t < LOGIN_WINDOW_SECONDS]
+    if len(_global_login_attempts) >= MAX_GLOBAL_LOGIN_ATTEMPTS:
+        return True
+
+    return False
 
 def record_failed_login(client_ip: str) -> None:
-    """Records a failed login attempt for client_ip."""
+    """Records a failed login attempt for both the client_ip and global tracker."""
     now = time.time()
-    if client_ip not in _login_attempts:
-        _login_attempts[client_ip] = []
-    _login_attempts[client_ip].append(now)
+    if client_ip not in _ip_login_attempts:
+        _ip_login_attempts[client_ip] = []
+    _ip_login_attempts[client_ip].append(now)
+    _global_login_attempts.append(now)
 
 def reset_login_attempts(client_ip: str) -> None:
-    """Clears failed login attempts for client_ip upon successful authentication."""
-    _login_attempts.pop(client_ip, None)
+    """Clears failed login attempts upon successful authentication."""
+    _ip_login_attempts.pop(client_ip, None)
+    _global_login_attempts.clear()
 
-# --- JWT Token Revocation Registry ---
+# --- JWT Token Revocation Registry (Bounded & Timestamp-Aware) ---
 
-_revoked_jtis: set[str] = set()
+_revoked_jtis: dict[str, float] = {}
 
-def revoke_jwt_jti(jti: str) -> None:
-    """Marks a JWT unique token identifier as revoked upon logout."""
+def revoke_jwt_jti(jti: str, expires_at: Optional[float] = None) -> None:
+    """Marks a JWT unique token identifier as revoked upon logout with an expiry timestamp."""
     if jti:
-        _revoked_jtis.add(str(jti))
+        exp = float(expires_at) if expires_at is not None else (time.time() + 86400)
+        _revoked_jtis[str(jti)] = exp
 
 def is_jwt_revoked(jti: str) -> bool:
-    """Checks if a JWT unique token identifier was revoked."""
+    """Checks if a JWT unique token identifier was revoked, pruning expired records."""
     if not jti:
         return False
-    return str(jti) in _revoked_jtis
+    k = str(jti)
+    if k in _revoked_jtis:
+        if time.time() < _revoked_jtis[k]:
+            return True
+        else:
+            _revoked_jtis.pop(k, None)
+    return False
+
+def sync_revoked_jtis(records: dict[str, float]) -> None:
+    """Hydrates active revoked tokens from persistent database on startup."""
+    now = time.time()
+    for k, exp in records.items():
+        if exp >= now:
+            _revoked_jtis[str(k)] = float(exp)
 
 # --- SSRF and URL Validation ---
 
@@ -229,6 +274,22 @@ def validate_external_url(url: str, allow_loopback: bool = True) -> tuple[bool, 
 
         if hostname in METADATA_HOSTNAMES or hostname.endswith(".metadata.google.internal"):
             return False, f"Target host '{hostname}' is not permitted."
+
+        # Inspect wildcard DNS services that embed destination IPs (e.g. *.nip.io, *.sslip.io)
+        for suffix in (".nip.io", ".sslip.io"):
+            if hostname.endswith(suffix):
+                prefix = hostname[:-len(suffix)]
+                parts = prefix.split(".")
+                if len(parts) >= 4:
+                    candidate_str = ".".join(parts[-4:])
+                    try:
+                        emb_ip = ipaddress.ip_address(candidate_str)
+                        if is_forbidden_ip(emb_ip):
+                            return False, f"Target IP '{emb_ip}' (cloud metadata / link-local) is not permitted."
+                        if not allow_loopback and emb_ip.is_loopback:
+                            return False, "Target loopback address is not permitted."
+                    except ValueError:
+                        pass
 
         # 1. Parse directly if IP literal
         ip_obj = parse_ip_candidate(hostname)

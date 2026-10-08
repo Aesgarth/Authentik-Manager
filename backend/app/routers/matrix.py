@@ -14,6 +14,7 @@ from app.models import (
 )
 from app.services.matrix_service import matrix_service
 from app.services.lease_service import lease_service
+from app.security import sanitize_csv_cell
 
 import logging
 
@@ -82,15 +83,20 @@ async def export_matrix_csv(current_user: dict = Depends(get_current_user)):
     writer = csv.writer(output)
 
     # Headers: Username, Email, Role, Last Login, followed by each Application Name
-    app_headers = [app.name for app in matrix.apps]
-    writer.writerow(["Username", "Email", "Role", "Last Login"] + app_headers)
+    app_headers = [sanitize_csv_cell(app.name) for app in matrix.apps]
+    writer.writerow([sanitize_csv_cell(h) for h in ["Username", "Email", "Role", "Last Login"]] + app_headers)
 
     for u in matrix.users:
         user_pk_str = str(u.pk)
         role = "Superuser" if u.is_superuser else "User"
         last_login_str = u.last_login or "Never"
 
-        row = [u.username, u.email or "", role, last_login_str]
+        row = [
+            sanitize_csv_cell(u.username),
+            sanitize_csv_cell(u.email or ""),
+            sanitize_csv_cell(role),
+            sanitize_csv_cell(last_login_str),
+        ]
         for app in matrix.apps:
             app_pk_str = str(app.pk)
             has_access = matrix.permissions.get(user_pk_str, {}).get(app_pk_str, False)
@@ -110,7 +116,7 @@ async def export_matrix_csv(current_user: dict = Depends(get_current_user)):
                 val = f"Temporary Member (Expires: {expiring.expires_at})"
             else:
                 val = "Member"
-            row.append(val)
+            row.append(sanitize_csv_cell(val))
         writer.writerow(row)
 
     csv_content = output.getvalue()

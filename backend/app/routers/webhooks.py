@@ -3,7 +3,8 @@ import json
 import logging
 import secrets
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Depends
+from app.auth import get_current_user
 from app.services.invite_service import invite_service
 from app.services.settings_service import settings_service
 from app.services.audit_service import audit_service
@@ -13,58 +14,66 @@ logger = logging.getLogger("authentik_manager.webhooks")
 
 router = APIRouter(prefix="/api/webhooks", tags=["Webhooks"])
 
+def safe_compare(val: Optional[str], expected: Optional[str]) -> bool:
+    if not val or not expected:
+        return False
+    try:
+        return secrets.compare_digest(str(val), str(expected))
+    except Exception:
+        return False
+
 def verify_webhook_token(request: Request) -> bool:
     """
     Validates incoming webhook authenticity.
-    If WEBHOOK_SECRET is configured, requests must provide matching token via:
-      1. Query param: ?token=<SECRET> or ?secret=<SECRET>
-      2. HTTP Header: X-Webhook-Token: <SECRET> or X-Authentik-Token: <SECRET>
-      3. HTTP Header: Authorization: Bearer <SECRET>
-    If no secret is configured, requests are accepted openly.
+    Requests must provide matching token via:
+      1. HTTP Header: X-Webhook-Token: <SECRET> or X-Authentik-Token: <SECRET>
+      2. HTTP Header: Authorization: Bearer <SECRET>
+      3. Query param: ?token=<SECRET> or ?secret=<SECRET>
+    Fails closed if no secret is configured.
     """
     expected_secret = getattr(settings, "WEBHOOK_SECRET", None) or settings_service.get_webhook_secret()
     if not expected_secret:
-        return True
+        logger.warning("Rejected webhook request: no WEBHOOK_SECRET configured on server (failing closed).")
+        return False
 
-    # 1. Query parameter
-    token_param = request.query_params.get("token") or request.query_params.get("secret")
-    if token_param and secrets.compare_digest(token_param, expected_secret):
-        return True
-
-    # 2. Custom header
+    # 1. Custom headers (preferred)
     header_token = request.headers.get("X-Webhook-Token") or request.headers.get("X-Authentik-Token")
-    if header_token and secrets.compare_digest(header_token, expected_secret):
+    if header_token and safe_compare(header_token, expected_secret):
         return True
 
-    # 3. Authorization Bearer header
+    # 2. Authorization Bearer header
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         bearer_val = auth_header[7:].strip()
-        if secrets.compare_digest(bearer_val, expected_secret):
+        if safe_compare(bearer_val, expected_secret):
             return True
+
+    # 3. Query parameter (fallback)
+    token_param = request.query_params.get("token") or request.query_params.get("secret")
+    if token_param and safe_compare(token_param, expected_secret):
+        return True
 
     return False
 
 @router.get("/authentik/status")
-async def webhook_status():
+async def webhook_status(current_user: dict = Depends(get_current_user)):
     """
     Returns the webhook configuration, endpoint URL, security status, and sample integration snippets.
+    Protected by session authentication to prevent secret disclosure.
     """
     base_host = settings.APP_HOST if settings.APP_HOST not in ("0.0.0.0", "") else "authentik-manager"
     secret = getattr(settings, "WEBHOOK_SECRET", None) or settings_service.get_webhook_secret()
-    example_url = f"http://{base_host}:{settings.APP_PORT}/api/webhooks/authentik"
-    if secret:
-        example_url += f"?token={secret}"
+    endpoint_url = f"http://{base_host}:{settings.APP_PORT}/api/webhooks/authentik"
 
     return {
         "status": "active",
         "webhook_endpoint": "/api/webhooks/authentik",
-        "recommended_webhook_url": example_url,
+        "recommended_webhook_url": endpoint_url,
         "token_protected": bool(secret),
         "supported_auth_methods": [
-            "Query parameter: ?token=<SECRET>",
             "HTTP Header: X-Webhook-Token: <SECRET>",
-            "HTTP Header: Authorization: Bearer <SECRET>"
+            "HTTP Header: Authorization: Bearer <SECRET>",
+            "Query parameter: ?token=<SECRET>",
         ],
         "supported_payloads": [
             "Authentik Generic Notification Transport (event_user_email, event_user_username)",
@@ -80,9 +89,10 @@ async def handle_authentik_webhook(request: Request, background_tasks: Backgroun
     Immediately assigns the pre-selected application groups via Authentik REST API.
     """
     client_ip = request.client.host if request.client else "unknown"
-    provided_token = request.query_params.get("token") or request.headers.get("X-Webhook-Token") or request.headers.get("Authorization")
+    provided_token = request.headers.get("X-Webhook-Token") or request.headers.get("Authorization") or request.query_params.get("token")
 
-    logger.info(f"Incoming webhook request from {client_ip} (method={request.method}, url={request.url})")
+    # Redact URL parameters in logs to avoid logging secret tokens
+    logger.info(f"Incoming webhook request from {client_ip} (method={request.method}, path={request.url.path})")
 
     if not verify_webhook_token(request):
         masked_token = f"{provided_token[:6]}..." if provided_token and len(provided_token) > 6 else (provided_token or "[NONE]")

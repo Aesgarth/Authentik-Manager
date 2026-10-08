@@ -577,28 +577,10 @@ class InviteService:
                 except Exception as e:
                     logger.warning(f"[WEBHOOK_EVENT] Check 3: Failed fetching active invitations: {e}")
 
-            # Check 4: Name match
+            # Security guard: Require hard matching (exact invitation_pk, target_email, or consumed single-use invite).
+            # Do NOT perform loose name substring or single-invite fallbacks that misattribute invites.
             if not matched_invite:
-                for i in pending_invites:
-                    inv_name = str(i["name"] or "").strip().lower()
-                    i_email = str(i["email"] or "").strip().lower()
-                    if target_email and i_email and target_email != i_email:
-                        continue
-                    if inv_name and len(inv_name) >= 3:
-                        if (target_username and inv_name in target_username.lower()) or (target_email and inv_name in target_email):
-                            matched_invite = i
-                            match_reason = f"Check 4: Recipient name substring match ('{inv_name}')"
-                            logger.info(f"[WEBHOOK_EVENT] -> {match_reason} -> matched invite #{i['id']}")
-                            break
-
-            # Check 5: If single pending invite exists without conflicting email
-            if not matched_invite and len(pending_invites) == 1:
-                single_inv = pending_invites[0]
-                inv_em = str(single_inv["email"] or "").strip().lower()
-                if not inv_em or not target_email or inv_em == target_email:
-                    matched_invite = single_inv
-                    match_reason = f"Check 5: Single pending invite fallback (#{single_inv['id']})"
-                    logger.info(f"[WEBHOOK_EVENT] -> {match_reason}")
+                pass
 
             if not matched_invite:
                 pending_ids = [dict(i)["id"] for i in pending_invites]
@@ -905,14 +887,31 @@ class InviteService:
                     f"phone='{target_phone}', single_use={bool(invite['single_use'])})"
                 )
 
-                # Strategy 0: Direct Match via User Attributes (invitation_pk, invitation_slug, or phone)
-                for u in human_users:
+                clean_target_phone = re.sub(r"\D", "", target_phone)
+
+                # Filter users to only those created at or after this invitation was issued
+                def _user_eligible(u_candidate: dict) -> bool:
+                    u_joined = u_candidate.get("date_joined")
+                    i_created = invite["created_at"]
+                    if not u_joined or not i_created:
+                        return True
+                    try:
+                        u_dt = datetime.fromisoformat(str(u_joined).replace("Z", "+00:00"))
+                        i_dt = datetime.fromisoformat(str(i_created).replace("Z", "+00:00"))
+                        return u_dt >= (i_dt - timedelta(minutes=5))
+                    except Exception:
+                        return True
+
+                eligible_users = [u for u in human_users if _user_eligible(u)]
+
+                # Strategy 0: Direct Match via User Attributes (invitation_pk, invitation_slug, or exact phone)
+                for u in eligible_users:
                     u_attrs = u.get("attributes") or {}
                     if not isinstance(u_attrs, dict):
                         continue
                     u_inv_pk = str(u_attrs.get("invitation_pk") or u_attrs.get("invitation") or "").strip()
                     u_inv_slug = str(u_attrs.get("invitation_slug") or "").strip().lower()
-                    u_phone = str(u_attrs.get("phone") or u_attrs.get("phoneNumber") or "").strip()
+                    u_phone = re.sub(r"\D", "", str(u_attrs.get("phone") or u_attrs.get("phoneNumber") or ""))
 
                     if u_inv_pk and u_inv_pk == inv_pk:
                         matched_user = u
@@ -922,76 +921,46 @@ class InviteService:
                         matched_user = u
                         matched_strategy = f"Strategy 0 (user attribute invitation_slug={u_inv_slug})"
                         break
-                    if target_phone and u_phone and (target_phone == u_phone or target_phone in u_phone or u_phone in target_phone):
+                    if clean_target_phone and u_phone and len(clean_target_phone) >= 7 and clean_target_phone == u_phone:
                         matched_user = u
-                        matched_strategy = f"Strategy 0 (user attribute phone={u_phone})"
+                        matched_strategy = f"Strategy 0 (user attribute exact phone={u_phone})"
                         break
 
                 # Strategy 1: Check Authentik invitation_used event correlation
                 if not matched_user:
                     if inv_pk and inv_pk in inv_to_user:
-                        matched_user = inv_to_user[inv_pk]
-                        matched_strategy = f"Strategy 1 (event correlation inv_pk={inv_pk})"
+                        candidate = inv_to_user[inv_pk]
+                        if _user_eligible(candidate):
+                            matched_user = candidate
+                            matched_strategy = f"Strategy 1 (event correlation inv_pk={inv_pk})"
                     elif inv_name and inv_name in inv_to_user:
-                        matched_user = inv_to_user[inv_name]
-                        matched_strategy = f"Strategy 1 (event correlation inv_name={inv_name})"
+                        candidate = inv_to_user[inv_name]
+                        if _user_eligible(candidate):
+                            matched_user = candidate
+                            matched_strategy = f"Strategy 1 (event correlation inv_name={inv_name})"
 
-                # Strategy 2: Match by target email if provided (check both email and username)
+                # Strategy 2: Match by exact target email if provided
                 if not matched_user and target_email:
                     if target_email in users_by_email:
-                        matched_user = users_by_email[target_email]
-                        matched_strategy = f"Strategy 2 (email match={target_email})"
-                    elif target_email in users_by_username:
-                        matched_user = users_by_username[target_email]
-                        matched_strategy = f"Strategy 2 (username match={target_email})"
+                        candidate = users_by_email[target_email]
+                        if _user_eligible(candidate):
+                            matched_user = candidate
+                            matched_strategy = f"Strategy 2 (email match={target_email})"
 
-                # Strategy 3: Check single-use invitation consumption
+                # Strategy 3: Check single-use invitation consumption with exact email or phone match
                 if not matched_user and invite["single_use"] and inv_pk and inv_pk not in active_inv_pks:
-                    for u in human_users:
+                    for u in eligible_users:
                         u_email = str(u.get("email") or "").strip().lower()
-                        u_name = str(u.get("name") or "").strip().lower()
-                        u_user = str(u.get("username") or "").strip().lower()
                         u_attrs = u.get("attributes") or {}
-                        u_phone = str(u_attrs.get("phone") or u_attrs.get("phoneNumber") or "").strip() if isinstance(u_attrs, dict) else ""
+                        u_phone = re.sub(r"\D", "", str(u_attrs.get("phone") or u_attrs.get("phoneNumber") or "")) if isinstance(u_attrs, dict) else ""
 
-                        if target_email and (target_email == u_email or target_email in u_user):
+                        if target_email and target_email == u_email:
                             matched_user = u
-                            matched_strategy = "Strategy 3 (consumed single-use + email/user match)"
+                            matched_strategy = "Strategy 3 (consumed single-use + exact email match)"
                             break
-                        if target_phone and u_phone and (target_phone == u_phone or target_phone in u_phone or u_phone in target_phone):
+                        if clean_target_phone and u_phone and len(clean_target_phone) >= 7 and clean_target_phone == u_phone:
                             matched_user = u
-                            matched_strategy = "Strategy 3 (consumed single-use + phone match)"
-                            break
-                        if inv_name and len(inv_name) >= 3:
-                            inv_lower = inv_name.lower()
-                            if (u_name and inv_lower in u_name) or (u_user and inv_lower in u_user):
-                                matched_user = u
-                                matched_strategy = "Strategy 3 (consumed single-use + name match)"
-                                break
-
-                # Strategy 4: Check users matching invite target email or invite recipient name
-                if not matched_user:
-                    for u in human_users:
-                        u_email = str(u.get("email") or "").strip().lower()
-                        u_name = str(u.get("name") or "").strip().lower()
-                        u_user = str(u.get("username") or "").strip().lower()
-                        
-                        email_match = bool(target_email and (target_email == u_email or target_email in u_user))
-                        
-                        name_match = False
-                        if inv_name and len(inv_name) >= 3:
-                            inv_lower = inv_name.lower()
-                            if (u_name and (inv_lower in u_name or u_name in inv_lower)) or \
-                               (u_user and (inv_lower in u_user or u_user in inv_lower)):
-                                name_match = True
-                        
-                        # Guard: If invite specifies an email and this user has a different email, do NOT match
-                        if target_email and u_email and target_email != u_email:
-                            continue
-
-                        if email_match or name_match:
-                            matched_user = u
-                            matched_strategy = f"Strategy 4 (name/email match: email={email_match}, name={name_match})"
+                            matched_strategy = "Strategy 3 (consumed single-use + exact phone match)"
                             break
 
                 if matched_user and is_valid_human_user(matched_user):

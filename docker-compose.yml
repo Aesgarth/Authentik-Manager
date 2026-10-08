@@ -6,7 +6,10 @@ services:
     container_name: authentik-manager
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # Bound to loopback by default for security; place behind reverse proxy (e.g. Caddy, Traefik, Nginx)
+      - "127.0.0.1:8000:8000"
+    security_opt:
+      - no-new-privileges:true
     # Loads all configuration directly from your .env file
     env_file:
       - .env

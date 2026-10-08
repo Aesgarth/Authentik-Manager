@@ -16,10 +16,19 @@ logger = logging.getLogger("authentik_manager.lease_service")
 
 class LeaseService:
     async def create_or_update_lease(self, req: CreateExpiringGrantRequest, actor: str = "Admin") -> ExpiringGrantSchema:
-        # Determine expiration ISO string
+        # Determine expiration ISO string with strict ISO-8601 validation and UTC normalization
         if req.expires_at:
-            expires_at = req.expires_at
+            try:
+                clean_exp = req.expires_at.strip().replace("Z", "+00:00")
+                dt = datetime.fromisoformat(clean_exp)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                expires_at = dt.astimezone(timezone.utc).isoformat()
+            except Exception:
+                raise ValueError("Invalid expires_at format; must be a valid ISO-8601 datetime string.")
         elif req.duration_hours:
+            if req.duration_hours <= 0 or req.duration_hours > 87600:
+                raise ValueError("Invalid duration_hours; must be between 1 and 87600 hours.")
             expires_at = (datetime.now(timezone.utc) + timedelta(hours=req.duration_hours)).isoformat()
         else:
             # Default to 7 days if neither supplied
@@ -54,8 +63,10 @@ class LeaseService:
         return ExpiringGrantSchema(**grant_dict)
 
     async def revoke_lease(self, req: RevokeExpiringGrantRequest, actor: str = "Admin") -> bool:
-        await revoke_expiring_grant(req.user_pk, req.app_pk, req.group_pk)
+        # Revoke user from Authentik FIRST; only mark revoked in SQLite on success
         success = await authentik_client.remove_user_from_group(req.group_pk, req.user_pk)
+        if success:
+            await revoke_expiring_grant(req.user_pk, req.app_pk, req.group_pk)
 
         await record_audit_log(
             actor=actor,
@@ -78,12 +89,28 @@ class LeaseService:
         return result
 
     async def check_and_expire_leases(self) -> int:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        due_grants = await get_due_expiring_grants(now_iso)
+        now = datetime.now(timezone.utc)
+        active_grants = await get_active_expiring_grants()
         expired_count = 0
 
-        for grant in due_grants:
+        for grant in active_grants:
             grant_id = grant["id"]
+            expires_at_str = grant.get("expires_at")
+            if not expires_at_str:
+                continue
+
+            try:
+                dt = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                dt_utc = dt.astimezone(timezone.utc)
+            except Exception as e:
+                logger.warning(f"Could not parse lease expires_at '{expires_at_str}' for grant {grant_id}: {e}")
+                continue
+
+            if dt_utc > now:
+                continue
+
             u_pk = grant["user_pk"]
             u_name = grant["user_name"]
             a_pk = grant["app_pk"]
@@ -92,9 +119,13 @@ class LeaseService:
             role = grant["role"]
 
             try:
-                # Remove user from group in Authentik
-                await authentik_client.remove_user_from_group(g_pk, u_pk)
-                # Mark as revoked in database
+                # Remove user from group in Authentik first
+                success = await authentik_client.remove_user_from_group(g_pk, u_pk)
+                if not success:
+                    logger.warning(f"Failed to remove user {u_pk} from group {g_pk} in Authentik during expiration sweep. Will retry next cycle.")
+                    continue
+
+                # Mark as revoked in database only upon Authentik success
                 await mark_grant_revoked(grant_id)
                 expired_count += 1
 

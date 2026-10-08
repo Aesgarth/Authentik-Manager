@@ -20,6 +20,7 @@ from app.models import (
     AutoSetupOidcRequest,
     AutoSetupOidcResponse,
 )
+from app.security import hash_password, verify_password, validate_external_url
 from app.services.audit_service import audit_service
 
 logger = logging.getLogger("authentik_manager.settings_service")
@@ -41,6 +42,17 @@ class SettingsService:
         self._default_lease_duration_hours: int = 72
         self._default_invite_expiry_days: int = 7
         self._webhook_secret: Optional[str] = None
+        self._admin_password_hash: Optional[str] = None
+
+    def verify_admin_password(self, candidate: str) -> bool:
+        """Constant-time verification of candidate against hashed or configured admin password."""
+        if not candidate:
+            return False
+        if self._admin_password_hash:
+            return verify_password(candidate, self._admin_password_hash)
+        if settings.ADMIN_PASSWORD:
+            return verify_password(candidate, settings.ADMIN_PASSWORD)
+        return False
 
     def encrypt_secret(self, raw: str) -> str:
         if not raw:
@@ -64,7 +76,10 @@ class SettingsService:
                 val = item.get("value", "")
                 is_secret = bool(item.get("is_secret", 0))
                 if is_secret:
-                    val = self.decrypt_secret(val)
+                    if key in ("admin_password_hash", "admin_password"):
+                        pass
+                    else:
+                        val = self.decrypt_secret(val)
 
                 if key == "authentik_url" and val:
                     settings.AUTHENTIK_URL = val
@@ -110,7 +125,11 @@ class SettingsService:
                         pass
                 elif key == "auth_method" and val:
                     settings.AUTH_METHOD = val
+                elif key == "admin_password_hash" and val:
+                    self._admin_password_hash = val
                 elif key == "admin_password" and val:
+                    if not self._admin_password_hash:
+                        self._admin_password_hash = hash_password(val)
                     settings.ADMIN_PASSWORD = val
                 elif key == "webhook_secret":
                     self._webhook_secret = val if val else None
@@ -209,6 +228,9 @@ class SettingsService:
 
         if req.authentik_url is not None:
             clean_url = req.authentik_url.strip().rstrip("/")
+            valid, err = validate_external_url(clean_url)
+            if not valid:
+                raise HTTPException(status_code=400, detail=f"Invalid authentik_url: {err}")
             await set_app_setting("authentik_url", clean_url)
             settings.AUTHENTIK_URL = clean_url
             updated_keys.append("authentik_url")
@@ -244,6 +266,9 @@ class SettingsService:
 
         if req.whatsapp_service_url is not None:
             clean_wa = req.whatsapp_service_url.strip().rstrip("/")
+            valid, err = validate_external_url(clean_wa)
+            if not valid:
+                raise HTTPException(status_code=400, detail=f"Invalid whatsapp_service_url: {err}")
             await set_app_setting("whatsapp_service_url", clean_wa)
             settings.WHATSAPP_SERVICE_URL = clean_wa
             updated_keys.append("whatsapp_service_url")
@@ -259,8 +284,13 @@ class SettingsService:
             updated_keys.append("custom_invite_message")
 
         if req.notification_webhook_url is not None:
-            await set_app_setting("notification_webhook_url", req.notification_webhook_url.strip())
-            self._notification_webhook_url = req.notification_webhook_url.strip()
+            clean_nw = req.notification_webhook_url.strip()
+            if clean_nw:
+                valid, err = validate_external_url(clean_nw)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid notification_webhook_url: {err}")
+            await set_app_setting("notification_webhook_url", clean_nw)
+            self._notification_webhook_url = clean_nw
             updated_keys.append("notification_webhook_url")
 
         if req.ntfy_topic is not None:
@@ -270,6 +300,10 @@ class SettingsService:
 
         if req.ntfy_server_url is not None:
             clean_ntfy = req.ntfy_server_url.strip().rstrip("/")
+            if clean_ntfy:
+                valid, err = validate_external_url(clean_ntfy)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid ntfy_server_url: {err}")
             await set_app_setting("ntfy_server_url", clean_ntfy)
             self._ntfy_server_url = clean_ntfy
             updated_keys.append("ntfy_server_url")
@@ -321,7 +355,9 @@ class SettingsService:
         if req.admin_password is not None:
             clean_pw = req.admin_password.strip()
             if clean_pw:
-                await set_app_setting("admin_password", clean_pw, is_secret=True)
+                hashed = hash_password(clean_pw)
+                await set_app_setting("admin_password_hash", hashed, is_secret=True)
+                self._admin_password_hash = hashed
                 settings.ADMIN_PASSWORD = clean_pw
                 updated_keys.append("admin_password")
 
@@ -341,6 +377,10 @@ class SettingsService:
 
         if req.app_url is not None:
             clean_app_url = req.app_url.strip().rstrip("/")
+            if clean_app_url:
+                valid, err = validate_external_url(clean_app_url)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid app_url: {err}")
             await set_app_setting("app_url", clean_app_url)
             self._app_url = clean_app_url
             updated_keys.append("app_url")
@@ -365,12 +405,20 @@ class SettingsService:
 
         if req.oidc_issuer_url is not None:
             clean_iss = req.oidc_issuer_url.strip().rstrip("/")
+            if clean_iss:
+                valid, err = validate_external_url(clean_iss)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid oidc_issuer_url: {err}")
             await set_app_setting("oidc_issuer_url", clean_iss)
             settings.OIDC_ISSUER_URL = clean_iss
             updated_keys.append("oidc_issuer_url")
 
         if req.oidc_redirect_uri is not None:
             clean_red = req.oidc_redirect_uri.strip()
+            if clean_red:
+                valid, err = validate_external_url(clean_red)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid oidc_redirect_uri: {err}")
             await set_app_setting("oidc_redirect_uri", clean_red)
             settings.OIDC_REDIRECT_URI = clean_red
             updated_keys.append("oidc_redirect_uri")
@@ -436,10 +484,23 @@ class SettingsService:
             return TestConnectionResponse(success=True, version="2024.8.3 (Demo)")
 
         url = (req.url or settings.AUTHENTIK_URL).strip().rstrip("/")
-        token = req.token or settings.AUTHENTIK_TOKEN
-        # If the user passed masked token, fallback to current settings.AUTHENTIK_TOKEN
-        if token and token.startswith("••"):
-            token = settings.AUTHENTIK_TOKEN
+        valid, err = validate_external_url(url)
+        if not valid:
+            return TestConnectionResponse(success=False, error=err)
+
+        is_custom_url = bool(req.url and req.url.strip().rstrip("/") != settings.AUTHENTIK_URL.rstrip("/"))
+        if is_custom_url:
+            if not req.token or req.token.startswith("••"):
+                return TestConnectionResponse(
+                    success=False,
+                    error="Cannot use stored Authentik token when testing a custom URL. Please supply the token explicitly."
+                )
+            token = req.token
+        else:
+            token = req.token or settings.AUTHENTIK_TOKEN
+            # If the user passed masked token, fallback to current settings.AUTHENTIK_TOKEN
+            if token and token.startswith("••"):
+                token = settings.AUTHENTIK_TOKEN
 
         insecure = req.insecure_skip_verify if req.insecure_skip_verify is not None else settings.AUTHENTIK_INSECURE_SKIP_VERIFY
         verify_ssl = not insecure
@@ -469,22 +530,23 @@ class SettingsService:
                 else:
                     return TestConnectionResponse(
                         success=False,
-                        error=f"Authentik returned HTTP {res.status_code}: {res.text[:200]}"
+                        error=f"Authentik returned HTTP {res.status_code}"
                     )
         except httpx.ConnectError:
             return TestConnectionResponse(
                 success=False,
-                error=f"Unable to reach host at {url}. Check hostname, port, and network reachability."
+                error="Failed to connect: Host is unreachable or connection was refused."
             )
         except httpx.ConnectTimeout:
             return TestConnectionResponse(
                 success=False,
-                error=f"Connection timed out reaching {url}."
+                error="Connection timed out while communicating with the specified Authentik host."
             )
         except Exception as e:
+            logger.warning(f"Authentik connection test error: {e}")
             return TestConnectionResponse(
                 success=False,
-                error=f"Connection test failed: {str(e)}"
+                error="Connection test failed: Unable to communicate with the specified host."
             )
 
     async def auto_setup_oidc(self, req: AutoSetupOidcRequest, actor: str = "Admin") -> AutoSetupOidcResponse:

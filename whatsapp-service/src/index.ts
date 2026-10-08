@@ -1,12 +1,35 @@
-import express, { Request, Response } from 'express';
-import cors from 'cors';
+import express, { Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import { whatsappManager } from './whatsapp.js';
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT) || 3001;
+const INTERNAL_SECRET = process.env.INTERNAL_SERVICE_SECRET || process.env.SECRET_KEY || '';
 
-app.use(cors());
 app.use(express.json());
+
+// Verify shared secret for internal bridge communication
+const verifyInternalAuth = (req: Request, res: Response, next: NextFunction) => {
+  if (!INTERNAL_SECRET) {
+    const clientIp = req.socket.remoteAddress || '';
+    if (clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1') {
+      return next();
+    }
+    return res.status(401).json({ error: 'Unauthorized internal request' });
+  }
+
+  const provided = (req.headers['x-bridge-secret'] || req.headers['x-internal-token'] || '') as string;
+  try {
+    const bufProvided = Buffer.from(provided);
+    const bufExpected = Buffer.from(INTERNAL_SECRET);
+    if (bufProvided.length !== bufExpected.length || !crypto.timingSafeEqual(bufProvided, bufExpected)) {
+      return res.status(401).json({ error: 'Unauthorized internal request' });
+    }
+  } catch {
+    return res.status(401).json({ error: 'Unauthorized internal request' });
+  }
+  next();
+};
 
 // Health check
 app.get('/health', (_req: Request, res: Response) => {
@@ -14,12 +37,12 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 // Connection status & QR code
-app.get('/status', (_req: Request, res: Response) => {
+app.get('/status', verifyInternalAuth, (_req: Request, res: Response) => {
   res.json(whatsappManager.getStatus());
 });
 
 // Send message
-app.post('/send', async (req: Request, res: Response) => {
+app.post('/send', verifyInternalAuth, async (req: Request, res: Response) => {
   const { recipient, message } = req.body;
 
   if (!recipient || !message) {
@@ -36,7 +59,7 @@ app.post('/send', async (req: Request, res: Response) => {
 });
 
 // Logout / Disconnect device
-app.post('/logout', async (_req: Request, res: Response) => {
+app.post('/logout', verifyInternalAuth, async (_req: Request, res: Response) => {
   try {
     await whatsappManager.logout();
     res.json({ status: 'logged_out', message: 'WhatsApp session cleared. Scan new QR code.' });
@@ -45,8 +68,9 @@ app.post('/logout', async (_req: Request, res: Response) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`[WhatsApp Service] Baileys bridge listening on port ${PORT}`);
+// Bind exclusively to 127.0.0.1 loopback
+app.listen(PORT, '127.0.0.1', () => {
+  console.log(`[WhatsApp Service] Baileys bridge listening on 127.0.0.1:${PORT}`);
   // Initialize connection
   whatsappManager.init().catch((err) => {
     console.error('[WhatsApp Service] Startup init error:', err);

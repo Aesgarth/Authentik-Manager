@@ -1,4 +1,7 @@
+import time
+import logging
 from typing import List, Dict, Optional, Tuple, Any
+from fastapi import HTTPException
 from app.authentik_client import authentik_client
 from app.config import settings
 from app.models import (
@@ -15,8 +18,42 @@ from app.services.audit_service import audit_service
 from app.services.lease_service import lease_service
 from app.database import revoke_expiring_grant
 
+logger = logging.getLogger("authentik_manager.matrix_service")
+
 class MatrixService:
-    async def get_matrix(self) -> AccessMatrixResponse:
+    def __init__(self):
+        self._cached_matrix: Optional[AccessMatrixResponse] = None
+        self._cached_at: float = 0.0
+
+    def invalidate_cache(self):
+        self._cached_matrix = None
+        self._cached_at = 0.0
+
+    def is_group_allowed_for_app(self, group_pk: str, app_pk: str, matrix: AccessMatrixResponse) -> bool:
+        """
+        Validates that group_pk is a recognized managed group for app_pk.
+        Explicitly prevents assigning arbitrary or administrative groups (like authentik Admins).
+        """
+        group_pk_str = str(group_pk)
+        app_pk_str = str(app_pk)
+
+        # Primary user group & granular admin group for this app
+        primary = matrix.app_group_map.get(app_pk_str)
+        admin = matrix.app_admin_group_map.get(app_pk_str)
+        if group_pk_str in (str(primary), str(admin)):
+            return True
+
+        # Check all bound groups for this specific app
+        for app in matrix.apps:
+            if str(app.pk) == app_pk_str:
+                for bg in (app.all_bound_groups or []):
+                    if str(bg.pk) == group_pk_str:
+                        return True
+        return False
+
+    async def get_matrix(self, force_refresh: bool = False) -> AccessMatrixResponse:
+        if not force_refresh and self._cached_matrix and (time.time() - self._cached_at < 15.0):
+            return self._cached_matrix
         apps_raw = await authentik_client.get_applications()
         groups_raw = await authentik_client.get_groups()
         users_raw = await authentik_client.get_users()
@@ -241,7 +278,7 @@ class MatrixService:
 
         expiring_grants = await lease_service.get_active_leases_map()
 
-        return AccessMatrixResponse(
+        resp = AccessMatrixResponse(
             users=user_schemas,
             apps=app_schemas,
             permissions=permissions,
@@ -251,8 +288,22 @@ class MatrixService:
             app_admin_group_map=app_admin_group_map,
             expiring_grants=expiring_grants,
         )
+        self._cached_matrix = resp
+        self._cached_at = time.time()
+        return resp
 
     async def toggle_permission(self, req: TogglePermissionRequest, actor: str = "Admin") -> bool:
+        matrix = await self.get_matrix()
+        if not self.is_group_allowed_for_app(req.group_pk, req.app_pk, matrix):
+            logger.warning(
+                f"Unauthorized group toggle rejected: user {req.user_pk}, "
+                f"group {req.group_pk} does not belong to app {req.app_pk}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: group '{req.group_pk}' is not a valid managed group for app '{req.app_pk}'."
+            )
+
         if req.grant:
             if req.duration_hours:
                 await lease_service.create_or_update_lease(
@@ -267,14 +318,19 @@ class MatrixService:
                     ),
                     actor=actor
                 )
+                self.invalidate_cache()
                 return True
             else:
                 success = await authentik_client.add_user_to_group(req.group_pk, req.user_pk)
                 action_desc = "GRANT_APP_ACCESS"
         else:
-            await revoke_expiring_grant(req.user_pk, req.app_pk, req.group_pk)
+            # Revoke in Authentik FIRST, only remove SQLite grant if Authentik succeeds
             success = await authentik_client.remove_user_from_group(req.group_pk, req.user_pk)
+            if success:
+                await revoke_expiring_grant(req.user_pk, req.app_pk, req.group_pk)
             action_desc = "REVOKE_APP_ACCESS"
+
+        self.invalidate_cache()
 
         await audit_service.log(
             actor=actor,

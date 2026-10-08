@@ -62,7 +62,12 @@ COPY backend/ ./backend/
 # Setup Configuration & Entrypoint
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh && mkdir -p /app/data/whatsapp_auth
+
+# Create non-root appuser and set permissions
+RUN adduser --disabled-password --gecos "" --uid 1000 appuser \
+    && chmod +x /app/entrypoint.sh \
+    && mkdir -p /app/data/whatsapp_auth \
+    && chown -R appuser:appuser /app
 
 # Port 8000 serves both the FastAPI API and the React frontend SPA
 EXPOSE 8000

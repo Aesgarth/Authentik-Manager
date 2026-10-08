@@ -1,6 +1,10 @@
 import os
+import logging
 from typing import Optional, Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.security import resolve_secret_key
+
+logger = logging.getLogger("authentik_manager.config")
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -26,10 +30,14 @@ class Settings(BaseSettings):
     APP_GROUP_PREFIX: str = "App - "
     DEFAULT_ENROLLMENT_FLOW: str = "default-enrollment-flow"
 
-    # Security & Tool Authentication: 'none', 'password', 'forward_auth', or 'oidc'
-    AUTH_METHOD: Literal["none", "password", "forward_auth", "oidc"] = "none"
+    # Security & Tool Authentication: 'password' (default), 'forward_auth', 'oidc', or 'none' (insecure)
+    AUTH_METHOD: Literal["none", "password", "forward_auth", "oidc"] = "password"
     ADMIN_PASSWORD: str = "admin123"
+    ALLOW_BREAKGLASS: bool = False
     WEBHOOK_SECRET: Optional[str] = None
+    INTERNAL_SERVICE_SECRET: Optional[str] = None
+    CORS_ORIGINS: str = ""
+    COOKIE_SECURE: bool = False
     
     # OIDC Configuration (for when AUTH_METHOD="oidc")
     OIDC_ISSUER_URL: Optional[str] = None      # e.g., https://auth.lan/application/o/authentik-manager/
@@ -41,6 +49,7 @@ class Settings(BaseSettings):
     # Forward-Auth Header Options (when behind Authentik Proxy Outpost)
     FORWARD_AUTH_HEADER_USER: str = "x-authentik-username"
     FORWARD_AUTH_HEADER_GROUPS: str = "x-authentik-groups"
+    FORWARD_AUTH_TRUSTED_PROXIES: str = "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
     # WhatsApp Integration (via Baileys Microservice)
     WHATSAPP_ENABLED: bool = True
@@ -51,3 +60,20 @@ class Settings(BaseSettings):
     DEMO_MODE: bool = False
 
 settings = Settings()
+
+# Automatically resolve a secure, persistent SECRET_KEY if default was left in place
+data_dir = os.path.dirname(settings.SQLITE_DB_PATH) or "data"
+settings.SECRET_KEY = resolve_secret_key(settings.SECRET_KEY, data_dir=data_dir)
+
+if not settings.INTERNAL_SERVICE_SECRET:
+    settings.INTERNAL_SERVICE_SECRET = settings.SECRET_KEY
+
+# Log startup security warnings
+if settings.AUTH_METHOD == "none":
+    logger.warning("=" * 70)
+    logger.warning("CRITICAL SECURITY WARNING: AUTH_METHOD is set to 'none'!")
+    logger.warning("Anyone who can access this port has full administrative control.")
+    logger.warning("=" * 70)
+
+if settings.ADMIN_PASSWORD == "admin123" and settings.AUTH_METHOD == "password":
+    logger.warning("SECURITY WARNING: ADMIN_PASSWORD is set to the default 'admin123'. Change it in settings!")

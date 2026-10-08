@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+import secrets
+from app.config import settings
 from app.auth import get_current_user
 from app.models import (
     WhatsAppStatusResponse,
@@ -63,7 +65,12 @@ async def logout_whatsapp(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/bot-command", response_model=BotCommandResponse)
-async def handle_bot_command(req: BotCommandRequest):
+async def handle_bot_command(req: BotCommandRequest, request: Request):
+    expected_secret = getattr(settings, "INTERNAL_SERVICE_SECRET", None) or settings.SECRET_KEY
+    provided_secret = request.headers.get("X-Bridge-Secret") or request.headers.get("X-Internal-Token")
+    if not provided_secret or not secrets.compare_digest(provided_secret, expected_secret):
+        raise HTTPException(status_code=401, detail="Unauthorized internal bridge command")
+
     reply = await bot_service.process_message(sender=req.sender, raw_message=req.message)
     return BotCommandResponse(reply=reply, executed=reply is not None)
 

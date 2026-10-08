@@ -119,6 +119,9 @@ export class WhatsAppManager {
 
       this.sock.ev.on('messages.upsert', async (m) => {
         if (!this.sock) return;
+        // Only process live incoming messages; ignore historical sync and appended messages
+        if (m.type !== 'notify') return;
+
         for (const msg of m.messages) {
           if (!msg.message) continue;
           const remoteJid = msg.key.remoteJid;
@@ -138,9 +141,13 @@ export class WhatsAppManager {
             const sender = remoteJid.split('@')[0].split(':')[0];
             try {
               const backendUrl = process.env.BACKEND_INTERNAL_URL || 'http://127.0.0.1:8000';
+              const bridgeSecret = process.env.INTERNAL_SERVICE_SECRET || process.env.SECRET_KEY || '';
               const res = await fetch(`${backendUrl}/api/whatsapp/bot-command`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Bridge-Secret': bridgeSecret,
+                },
                 body: JSON.stringify({ sender, message: trimmed }),
               });
               if (res.ok) {

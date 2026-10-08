@@ -16,48 +16,43 @@ class BotService:
     def is_admin_phone(self, sender: str) -> bool:
         """
         Validates if the sender phone number matches configured admin numbers.
-        sender is typically digits from WhatsApp JID, e.g. '447123456789'.
+        Requires exact normalized digit match (no suffix matching or wildcard *).
         """
         allowed_raw = settings_service._admin_phone_numbers
         if not allowed_raw or not allowed_raw.strip():
             return False
 
-        if allowed_raw.strip() == "*":
-            return True
-
         sender_digits = re.sub(r"\D", "", sender)
-        if not sender_digits:
+        if not sender_digits or len(sender_digits) < 7:
             return False
 
         allowed_list = [p.strip() for p in allowed_raw.split(",") if p.strip()]
         for admin_entry in allowed_list:
+            if admin_entry == "*":
+                continue  # Disallow wildcard matching
+
             admin_digits = re.sub(r"\D", "", admin_entry)
             if not admin_digits:
                 continue
 
-            # Check direct match
+            # Direct exact match
             if sender_digits == admin_digits:
                 return True
 
-            # If admin number starts with 0 (e.g. 07123456789) and sender has country code (e.g. 447123456789)
+            # If admin number was entered with leading 0 (e.g. 07123456789) and default country code exists
             if admin_entry.startswith("0") and settings.DEFAULT_COUNTRY_CODE:
                 with_cc = settings.DEFAULT_COUNTRY_CODE + admin_digits[1:]
                 if sender_digits == with_cc:
                     return True
 
-            # Suffix match (e.g. sender has full country code, admin entered national format)
-            if sender_digits.endswith(admin_digits) or admin_digits.endswith(sender_digits):
-                return True
-
         return False
 
     def is_admin_telegram_chat(self, chat_id: str) -> bool:
+        """Validates if chat_id matches configured Telegram admin chat IDs (exact match, no *)."""
         allowed_raw = settings_service._telegram_admin_chat_ids
         if not allowed_raw or not allowed_raw.strip():
             return False
-        if allowed_raw.strip() == "*":
-            return True
-        allowed_list = [c.strip() for c in allowed_raw.split(",") if c.strip()]
+        allowed_list = [c.strip() for c in allowed_raw.split(",") if c.strip() and c.strip() != "*"]
         return str(chat_id).strip() in allowed_list
 
     def handle_help(self, channel: str = "whatsapp") -> str:
@@ -163,6 +158,14 @@ class BotService:
                 assignments = matched_template.assignments
                 is_wildcard = "*" in assignments
                 wildcard_role = assignments.get("*", "member")
+
+                # Disallow minting administrator privileges via chat bot commands
+                if wildcard_role == "admin" or any(r == "admin" for r in assignments.values()):
+                    return (
+                        f"🛡️ *Security Restriction*\n\n"
+                        f"Preset '{matched_template.name}' includes Administrator privileges.\n"
+                        "Admin-role invitations cannot be generated via chat commands. Please issue this invite via the web manager."
+                    )
 
                 for app in matrix.apps:
                     role = None

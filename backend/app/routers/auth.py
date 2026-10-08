@@ -9,6 +9,8 @@ from app.config import settings
 from app.auth import create_access_token, decode_access_token, get_current_user
 from app.models import LoginRequest, AuthStatus
 from app.services.audit_service import audit_service
+from app.services.settings_service import settings_service
+from app.security import is_login_rate_limited, record_failed_login, reset_login_attempts
 
 logger = logging.getLogger("authentik_manager.routers.auth")
 
@@ -22,7 +24,7 @@ async def get_auth_status(request: Request):
             authenticated=True,
             auth_method=settings.AUTH_METHOD,
             user=user.get("username"),
-            is_admin=user.get("is_admin", True),
+            is_admin=user.get("is_admin", False),
             demo_mode=settings.DEMO_MODE,
         )
     except HTTPException:
@@ -35,33 +37,49 @@ async def get_auth_status(request: Request):
         )
 
 @router.post("/login")
-async def login_password(req: LoginRequest, response: Response):
-    # Allow master admin password as breakglass even if auth method is OIDC or forward_auth
-    is_master_breakglass = bool(settings.ADMIN_PASSWORD and req.password == settings.ADMIN_PASSWORD)
-    if settings.AUTH_METHOD != "password" and not is_master_breakglass:
+async def login_password(req: LoginRequest, request: Request, response: Response):
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Rate limiting on failed login attempts
+    if is_login_rate_limited(client_ip):
+        logger.warning(f"Login rate limit exceeded for client IP: {client_ip}")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts. Please wait 5 minutes."
+        )
+
+    # Breakglass authentication check
+    is_breakglass_active = bool(settings.ALLOW_BREAKGLASS and settings_service.verify_admin_password(req.password))
+    if settings.AUTH_METHOD != "password" and not is_breakglass_active:
         raise HTTPException(
             status_code=400,
             detail=f"Password login not enabled (active auth method: {settings.AUTH_METHOD})"
         )
 
-    if req.password != settings.ADMIN_PASSWORD:
+    # Constant-time password verification against hashed/configured admin credentials
+    if not settings_service.verify_admin_password(req.password):
+        record_failed_login(client_ip)
         await audit_service.log(
             actor="unknown",
             action="LOGIN_ATTEMPT",
             target_type="AUTH",
             target_name="admin",
-            details="Invalid password attempt",
+            details=f"Invalid password attempt from {client_ip}",
             status="FAILED"
         )
         raise HTTPException(status_code=401, detail="Invalid password")
 
+    reset_login_attempts(client_ip)
+
     token = create_access_token({"sub": "admin", "name": "Administrator", "is_admin": True})
+    secure_cookie = (request.url.scheme == "https") or settings.COOKIE_SECURE
     response.set_cookie(
         key="session_token",
         value=token,
         httponly=True,
+        secure=secure_cookie,
         samesite="lax",
-        max_age=86400 * 7
+        max_age=86400  # 24 hours
     )
     await audit_service.log(
         actor="admin",
@@ -71,7 +89,7 @@ async def login_password(req: LoginRequest, response: Response):
         details="Successful password login",
         status="SUCCESS"
     )
-    return {"status": "ok", "token": token}
+    return {"status": "ok", "authenticated": True}
 
 @router.post("/logout")
 async def logout(response: Response):
@@ -127,7 +145,8 @@ async def oidc_login(request: Request):
     logger.info(f"[OIDC Login] Redirecting to Authentik authorize endpoint: {auth_endpoint} (redirect_uri: '{redirect_uri}', client_id: '{settings.OIDC_CLIENT_ID}')")
 
     response = RedirectResponse(url=auth_url)
-    response.set_cookie(key="oidc_state", value=state, httponly=True, max_age=300)
+    secure_cookie = (request.url.scheme == "https") or settings.COOKIE_SECURE
+    response.set_cookie(key="oidc_state", value=state, httponly=True, secure=secure_cookie, max_age=300)
     return response
 
 @router.get("/oidc/callback")
@@ -144,10 +163,10 @@ async def oidc_callback(request: Request, response: Response, code: Optional[str
         return RedirectResponse(url=f"/?oidc_error={quote(err_msg)}", status_code=status.HTTP_302_FOUND)
 
     saved_state = request.cookies.get("oidc_state")
-    if not saved_state or saved_state != state:
-        err_msg = f"Invalid OIDC state (CSRF check failed). Saved: '{saved_state}', Received: '{state}'"
+    if not saved_state or not secrets.compare_digest(saved_state, state or ""):
+        err_msg = "Invalid OIDC state (CSRF check failed). Please try logging in again."
         logger.error(f"[OIDC Callback] {err_msg}")
-        return RedirectResponse(url=f"/?oidc_error={quote('Login session expired or state mismatch. Please try again.')}", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url=f"/?oidc_error={quote(err_msg)}", status_code=status.HTTP_302_FOUND)
 
     _, token_endpoint, userinfo_endpoint = get_oidc_endpoints(settings.OIDC_ISSUER_URL)
     redirect_uri = settings.OIDC_REDIRECT_URI or str(request.url_for("oidc_callback"))
@@ -168,7 +187,7 @@ async def oidc_callback(request: Request, response: Response, code: Optional[str
             headers={"Accept": "application/json"}
         )
         if token_res.status_code != 200:
-            err_msg = f"Token exchange failed (HTTP {token_res.status_code}): {token_res.text[:150]}"
+            err_msg = f"Token exchange failed (HTTP {token_res.status_code})"
             logger.error(f"[OIDC Callback] {err_msg}")
             return RedirectResponse(url=f"/?oidc_error={quote(err_msg)}", status_code=status.HTTP_302_FOUND)
         
@@ -182,21 +201,22 @@ async def oidc_callback(request: Request, response: Response, code: Optional[str
             headers={"Authorization": f"Bearer {access_token}"}
         )
         if user_res.status_code != 200:
-            err_msg = f"Failed to fetch userinfo from Authentik (HTTP {user_res.status_code}): {user_res.text[:150]}"
+            err_msg = f"Failed to fetch userinfo from Authentik (HTTP {user_res.status_code})"
             logger.error(f"[OIDC Callback] {err_msg}")
             return RedirectResponse(url=f"/?oidc_error={quote(err_msg)}", status_code=status.HTTP_302_FOUND)
         
         userinfo = user_res.json()
-        logger.info(f"[OIDC Callback] Userinfo received: {userinfo}")
+        # Redacted userinfo logging (no PII dump in production logs)
+        logger.info(f"[OIDC Callback] Userinfo received for user '{userinfo.get('preferred_username', 'User')}'")
 
     username = userinfo.get("preferred_username") or userinfo.get("nickname") or userinfo.get("name") or "User"
     user_groups = userinfo.get("groups", [])
     logger.info(f"[OIDC Callback] Authenticated user: '{username}', Detected Groups: {user_groups}")
 
-    # Check if user is member of required admin group
-    required_group = settings.OIDC_ADMIN_GROUP
-    if required_group and required_group not in user_groups and "authentik Admins" not in user_groups:
-        err_msg = f"Access Denied: User '{username}' is not a member of '{required_group}'. Groups found: {user_groups}"
+    # Check if user is member of required admin group (fail closed)
+    required_group = (settings.OIDC_ADMIN_GROUP or "").strip() or "authentik Admins"
+    if required_group not in user_groups and "authentik Admins" not in user_groups:
+        err_msg = f"Access Denied: User '{username}' is not a member of '{required_group}'"
         logger.warning(f"[OIDC Callback] {err_msg}")
         await audit_service.log(
             actor=username,
@@ -217,12 +237,14 @@ async def oidc_callback(request: Request, response: Response, code: Optional[str
     })
 
     redirect = RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    secure_cookie = (request.url.scheme == "https") or settings.COOKIE_SECURE
     redirect.set_cookie(
         key="session_token",
         value=session_token,
         httponly=True,
+        secure=secure_cookie,
         samesite="lax",
-        max_age=86400 * 7
+        max_age=86400  # 24 hours
     )
     redirect.delete_cookie("oidc_state")
 
@@ -231,7 +253,7 @@ async def oidc_callback(request: Request, response: Response, code: Optional[str
         action="OIDC_LOGIN_SUCCESS",
         target_type="AUTH",
         target_name=username,
-        details=f"Logged in via Authentik OIDC (groups: {user_groups})",
+        details="Logged in via Authentik OIDC",
         status="SUCCESS"
     )
     logger.info(f"[OIDC Callback] Login complete for '{username}'. Redirecting to root dashboard.")

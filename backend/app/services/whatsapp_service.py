@@ -7,6 +7,10 @@ class WhatsAppService:
         self.base_url = settings.WHATSAPP_SERVICE_URL.rstrip("/")
         self.enabled = settings.WHATSAPP_ENABLED
 
+    def _get_headers(self) -> Dict[str, str]:
+        secret = getattr(settings, "INTERNAL_SERVICE_SECRET", None) or settings.SECRET_KEY
+        return {"X-Bridge-Secret": secret}
+
     async def get_status(self) -> Dict[str, Any]:
         if not self.enabled:
             return {
@@ -19,7 +23,7 @@ class WhatsAppService:
 
         try:
             async with httpx.AsyncClient(timeout=4.0) as client:
-                res = await client.get(f"{self.base_url}/status")
+                res = await client.get(f"{self.base_url}/status", headers=self._get_headers())
                 if res.status_code == 200:
                     data = res.json()
                     data["available"] = True
@@ -42,6 +46,7 @@ class WhatsAppService:
         async with httpx.AsyncClient(timeout=15.0) as client:
             res = await client.post(
                 f"{self.base_url}/send",
+                headers=self._get_headers(),
                 json={"recipient": recipient, "message": message},
             )
             if res.status_code != 200:
@@ -52,7 +57,7 @@ class WhatsAppService:
 
     async def logout(self) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            res = await client.post(f"{self.base_url}/logout")
+            res = await client.post(f"{self.base_url}/logout", headers=self._get_headers())
             return res.json()
 
 whatsapp_service = WhatsAppService()

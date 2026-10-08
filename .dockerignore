@@ -1,0 +1,13 @@
+.git
+.github
+.env*
+**/data
+**/node_modules
+*.md
+__pycache__
+*.pyc
+.pytest_cache
+tests
+dist
+.coverage
+htmlcov

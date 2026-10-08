@@ -45,9 +45,10 @@ class TelegramService:
     def is_admin_chat(self, chat_id: str) -> bool:
         if not self.admin_chat_ids:
             return False
-        if "*" in self.admin_chat_ids:
-            return True
         clean_id = str(chat_id).strip()
+        # Wildcards are rejected for security; exact chat ID required
+        if clean_id == "*":
+            return False
         return clean_id in self.admin_chat_ids
 
     async def test_connection(self, token: Optional[str] = None) -> TestTelegramResponse:

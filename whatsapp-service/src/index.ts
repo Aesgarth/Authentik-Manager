@@ -1,10 +1,11 @@
 import express, { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { whatsappManager } from './whatsapp.js';
+import { getBridgeSecret } from './secret.js';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
-const INTERNAL_SECRET = process.env.INTERNAL_SERVICE_SECRET || process.env.SECRET_KEY || '';
+const INTERNAL_SECRET = getBridgeSecret();
 
 app.use(express.json());
 

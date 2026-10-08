@@ -45,6 +45,7 @@ async def toggle_user_active(user_pk: int, current_user: dict = Depends(get_curr
         status="SUCCESS"
     )
 
+    matrix_service.invalidate_cache()
     return {"user_pk": user_pk, "is_active": new_state}
 
 @router.patch("/{user_pk}/phone")
@@ -93,4 +94,5 @@ async def update_user_phone(
         status="SUCCESS"
     )
 
+    matrix_service.invalidate_cache()
     return {"user_pk": user_pk, "phone": phone_clean}

@@ -60,6 +60,9 @@ class LeaseService:
             status="SUCCESS" if success else "WARNING"
         )
 
+        from app.services.matrix_service import matrix_service
+        matrix_service.invalidate_cache()
+
         return ExpiringGrantSchema(**grant_dict)
 
     async def revoke_lease(self, req: RevokeExpiringGrantRequest, actor: str = "Admin") -> bool:
@@ -77,6 +80,8 @@ class LeaseService:
             details=f"Revoked temporary access on app {req.app_pk}, group {req.group_pk}",
             status="SUCCESS" if success else "WARNING"
         )
+        from app.services.matrix_service import matrix_service
+        matrix_service.invalidate_cache()
         return success
 
     async def get_active_leases_map(self) -> Dict[str, Dict[str, ExpiringGrantSchema]]:
@@ -143,6 +148,10 @@ class LeaseService:
                 logger.info(f"Automatically expired lease for user {u_name} ({u_pk}) on {a_name}")
             except Exception as e:
                 logger.error(f"Failed to auto-expire grant {grant_id} for user {u_pk}: {e}")
+
+        if expired_count > 0:
+            from app.services.matrix_service import matrix_service
+            matrix_service.invalidate_cache()
 
         return expired_count
 

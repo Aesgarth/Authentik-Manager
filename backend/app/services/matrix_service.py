@@ -32,24 +32,49 @@ class MatrixService:
     def is_group_allowed_for_app(self, group_pk: str, app_pk: str, matrix: AccessMatrixResponse) -> bool:
         """
         Validates that group_pk is a recognized managed group for app_pk.
-        Explicitly prevents assigning arbitrary or administrative groups (like authentik Admins).
+        Explicitly prevents assigning arbitrary or global administrative groups (like authentik Admins).
         """
         group_pk_str = str(group_pk)
         app_pk_str = str(app_pk)
 
-        # Primary user group & granular admin group for this app
-        primary = matrix.app_group_map.get(app_pk_str)
-        admin = matrix.app_admin_group_map.get(app_pk_str)
-        if group_pk_str in (str(primary), str(admin)):
+        target_app = next((a for a in matrix.apps if str(a.pk) == app_pk_str), None)
+        if not target_app:
+            return False
+
+        # Disallow if group is superuser or global admin group
+        for bg in (target_app.all_bound_groups or []):
+            if str(bg.pk) == group_pk_str:
+                if bg.is_superuser or bg.name.strip().lower() in ("authentik admins", "admins", "administrator"):
+                    return False
+                return True
+
+        if target_app.granular_user_group_pk and str(target_app.granular_user_group_pk) == group_pk_str:
+            return True
+        if target_app.granular_admin_group_pk and str(target_app.granular_admin_group_pk) == group_pk_str:
+            return True
+        if target_app.bound_group_pk and str(target_app.bound_group_pk) == group_pk_str:
+            if target_app.bound_group_name and target_app.bound_group_name.strip().lower() in ("authentik admins", "admins", "administrator"):
+                return False
             return True
 
-        # Check all bound groups for this specific app
-        for app in matrix.apps:
-            if str(app.pk) == app_pk_str:
-                for bg in (app.all_bound_groups or []):
-                    if str(bg.pk) == group_pk_str:
-                        return True
         return False
+
+    def get_all_managed_group_pks(self, matrix: AccessMatrixResponse) -> set[str]:
+        """Returns all valid managed group PKs across all applications, excluding global superuser groups."""
+        managed: set[str] = set()
+        for a in matrix.apps:
+            for bg in (a.all_bound_groups or []):
+                if bg.is_superuser or bg.name.strip().lower() in ("authentik admins", "admins", "administrator"):
+                    continue
+                managed.add(str(bg.pk))
+            if a.granular_user_group_pk:
+                managed.add(str(a.granular_user_group_pk))
+            if a.granular_admin_group_pk:
+                managed.add(str(a.granular_admin_group_pk))
+            if a.bound_group_pk:
+                if not (a.bound_group_name and a.bound_group_name.strip().lower() in ("authentik admins", "admins", "administrator")):
+                    managed.add(str(a.bound_group_pk))
+        return managed
 
     async def get_matrix(self, force_refresh: bool = False) -> AccessMatrixResponse:
         if not force_refresh and self._cached_matrix and (time.time() - self._cached_at < 15.0):
@@ -150,12 +175,16 @@ class MatrixService:
                 grp_name_clean = grp_name.strip().lower()
                 is_u = (g_pk == granular_user_group_pk) or (grp_name_clean in expected_user_names)
                 is_a = (g_pk == granular_admin_group_pk) or (grp_name_clean in expected_admin_names) or ("admin" in grp_name_clean)
+                is_super = bool(grp_obj.get("is_superuser", False)) if grp_obj else False
+                if grp_name_clean in ("authentik admins", "admins", "administrator"):
+                    is_super = True
                 all_bound_groups.append(BoundGroupRef(
                     pk=g_pk,
                     name=grp_name,
                     is_granular_user=is_u,
                     is_granular_admin=is_a,
                     is_admin_group=is_a,
+                    is_superuser=is_super,
                 ))
 
             # Primary bound group to map standard cell clicks to:
@@ -295,14 +324,16 @@ class MatrixService:
     async def toggle_permission(self, req: TogglePermissionRequest, actor: str = "Admin") -> bool:
         matrix = await self.get_matrix()
         if not self.is_group_allowed_for_app(req.group_pk, req.app_pk, matrix):
-            logger.warning(
-                f"Unauthorized group toggle rejected: user {req.user_pk}, "
-                f"group {req.group_pk} does not belong to app {req.app_pk}"
-            )
-            raise HTTPException(
-                status_code=403,
-                detail=f"Forbidden: group '{req.group_pk}' is not a valid managed group for app '{req.app_pk}'."
-            )
+            matrix = await self.get_matrix(force_refresh=True)
+            if not self.is_group_allowed_for_app(req.group_pk, req.app_pk, matrix):
+                logger.warning(
+                    f"Unauthorized group toggle rejected: user {req.user_pk}, "
+                    f"group {req.group_pk} does not belong to app {req.app_pk}"
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Forbidden: group '{req.group_pk}' is not a valid managed group for app '{req.app_pk}'."
+                )
 
         if req.grant:
             if req.duration_hours:

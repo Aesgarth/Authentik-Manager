@@ -123,6 +123,9 @@ class ProvisionerService:
             status="SUCCESS"
         )
 
+        from app.services.matrix_service import matrix_service
+        matrix_service.invalidate_cache()
+
         return {
             "app_pk": app_pk,
             "app_name": app_name,
@@ -203,6 +206,9 @@ class ProvisionerService:
                 )
                 provisioned_apps.append(app_name)
                 details.append(res)
+
+        from app.services.matrix_service import matrix_service
+        matrix_service.invalidate_cache()
 
         return {
             "provisioned_count": len(provisioned_apps),

@@ -31,6 +31,7 @@ class BoundGroupRef(BaseModel):
     is_granular_user: bool = False
     is_granular_admin: bool = False
     is_admin_group: bool = False
+    is_superuser: bool = False
 
 class ApplicationSchema(BaseModel):
     pk: str # UUID
@@ -302,6 +303,7 @@ class UpdateSettingsRequest(BaseModel):
     # OIDC & Security Settings
     auth_method: Optional[str] = None
     admin_password: Optional[str] = None
+    current_password: Optional[str] = None
     webhook_secret: Optional[str] = None
     app_url: Optional[str] = None
     oidc_client_id: Optional[str] = None

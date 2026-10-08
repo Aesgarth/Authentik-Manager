@@ -6,15 +6,27 @@ from urllib.parse import urlencode, quote
 from fastapi import APIRouter, Request, Response, HTTPException, status
 from fastapi.responses import RedirectResponse
 from app.config import settings
-from app.auth import create_access_token, decode_access_token, get_current_user
+from app.auth import create_access_token, decode_access_token, get_current_user, get_client_ip, is_trusted_proxy
 from app.models import LoginRequest, AuthStatus
 from app.services.audit_service import audit_service
 from app.services.settings_service import settings_service
-from app.security import is_login_rate_limited, record_failed_login, reset_login_attempts
+from app.security import is_login_rate_limited, record_failed_login, reset_login_attempts, revoke_jwt_jti
 
 logger = logging.getLogger("authentik_manager.routers.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+
+def is_secure_request(request: Request) -> bool:
+    if settings.COOKIE_SECURE:
+        return True
+    if request.url.scheme == "https":
+        return True
+    direct_ip = request.client.host if request.client else ""
+    if is_trusted_proxy(direct_ip, settings.FORWARD_AUTH_TRUSTED_PROXIES):
+        proto = request.headers.get("x-forwarded-proto", "").lower()
+        if proto == "https":
+            return True
+    return False
 
 @router.get("/status", response_model=AuthStatus)
 async def get_auth_status(request: Request):
@@ -38,7 +50,7 @@ async def get_auth_status(request: Request):
 
 @router.post("/login")
 async def login_password(req: LoginRequest, request: Request, response: Response):
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
 
     # Rate limiting on failed login attempts
     if is_login_rate_limited(client_ip):
@@ -51,6 +63,8 @@ async def login_password(req: LoginRequest, request: Request, response: Response
     # Breakglass authentication check
     is_breakglass_active = bool(settings.ALLOW_BREAKGLASS and settings_service.verify_admin_password(req.password))
     if settings.AUTH_METHOD != "password" and not is_breakglass_active:
+        if settings.ALLOW_BREAKGLASS:
+            record_failed_login(client_ip)
         raise HTTPException(
             status_code=400,
             detail=f"Password login not enabled (active auth method: {settings.AUTH_METHOD})"
@@ -72,7 +86,7 @@ async def login_password(req: LoginRequest, request: Request, response: Response
     reset_login_attempts(client_ip)
 
     token = create_access_token({"sub": "admin", "name": "Administrator", "is_admin": True})
-    secure_cookie = (request.url.scheme == "https") or settings.COOKIE_SECURE
+    secure_cookie = is_secure_request(request)
     response.set_cookie(
         key="session_token",
         value=token,
@@ -92,7 +106,16 @@ async def login_password(req: LoginRequest, request: Request, response: Response
     return {"status": "ok", "authenticated": True}
 
 @router.post("/logout")
-async def logout(response: Response):
+async def logout(request: Request, response: Response):
+    token = request.cookies.get("session_token")
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+    if token:
+        payload = decode_access_token(token)
+        if payload and payload.get("jti"):
+            revoke_jwt_jti(payload["jti"])
     response.delete_cookie("session_token")
     return {"status": "logged_out"}
 
@@ -145,7 +168,7 @@ async def oidc_login(request: Request):
     logger.info(f"[OIDC Login] Redirecting to Authentik authorize endpoint: {auth_endpoint} (redirect_uri: '{redirect_uri}', client_id: '{settings.OIDC_CLIENT_ID}')")
 
     response = RedirectResponse(url=auth_url)
-    secure_cookie = (request.url.scheme == "https") or settings.COOKIE_SECURE
+    secure_cookie = is_secure_request(request)
     response.set_cookie(key="oidc_state", value=state, httponly=True, secure=secure_cookie, max_age=300)
     return response
 
@@ -237,7 +260,7 @@ async def oidc_callback(request: Request, response: Response, code: Optional[str
     })
 
     redirect = RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    secure_cookie = (request.url.scheme == "https") or settings.COOKIE_SECURE
+    secure_cookie = is_secure_request(request)
     redirect.set_cookie(
         key="session_token",
         value=session_token,

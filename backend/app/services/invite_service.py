@@ -437,6 +437,9 @@ class InviteService:
             except Exception as e:
                 logger.warning(f"Failed to dispatch redemption notification: {e}")
 
+            from app.services.matrix_service import matrix_service
+            matrix_service.invalidate_cache()
+
             return True
         except Exception as e:
             logger.error(f"Error in _assign_groups_and_mark_redeemed: {e}", exc_info=True)
@@ -566,10 +569,52 @@ class InviteService:
                     active_invs = await authentik_client.get_invitations()
                     active_pks = {str(a.get("pk")) for a in active_invs}
                     logger.info(f"[WEBHOOK_EVENT] Check 3: Active Authentik invitation PKs count: {len(active_pks)}")
+                    now_utc = datetime.now(timezone.utc)
                     for i in pending_invites:
                         if i["single_use"] and str(i["invitation_pk"]) not in active_pks:
+                            # 1. Skip if invite has expired
+                            if i["expires_at"]:
+                                try:
+                                    exp_dt = datetime.fromisoformat(str(i["expires_at"]).replace("Z", "+00:00"))
+                                    if exp_dt.tzinfo is None:
+                                        exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                                    if now_utc > exp_dt:
+                                        continue
+                                except Exception:
+                                    pass
+
+                            # 2. Check user date_joined vs invite creation
+                            u_joined = matched_user.get("date_joined")
+                            i_created = i["created_at"]
+                            if u_joined and i_created:
+                                try:
+                                    u_dt = datetime.fromisoformat(str(u_joined).replace("Z", "+00:00"))
+                                    i_dt = datetime.fromisoformat(str(i_created).replace("Z", "+00:00"))
+                                    if u_dt < (i_dt - timedelta(minutes=5)):
+                                        continue
+                                except Exception:
+                                    pass
+
+                            # 3. Match email or phone if specified on invite
                             i_email = str(i["email"] or "").strip().lower()
-                            if not i_email or not target_email or i_email == target_email:
+                            i_phone = re.sub(r"\D", "", str(i["phone"] or "").strip())
+                            u_attrs = matched_user.get("attributes") or {}
+                            u_phone = re.sub(r"\D", "", str(u_attrs.get("phone") or u_attrs.get("phoneNumber") or "")) if isinstance(u_attrs, dict) else ""
+
+                            if i_email:
+                                if target_email and i_email == target_email:
+                                    matched_invite = i
+                                    match_reason = f"Check 3: Consumed single-use invite #{i['id']} ({i['invitation_pk']}) with matching email"
+                                    logger.info(f"[WEBHOOK_EVENT] -> {match_reason}")
+                                    break
+                            elif i_phone:
+                                if u_phone and len(i_phone) >= 7 and i_phone == u_phone:
+                                    matched_invite = i
+                                    match_reason = f"Check 3: Consumed single-use invite #{i['id']} ({i['invitation_pk']}) with matching phone"
+                                    logger.info(f"[WEBHOOK_EVENT] -> {match_reason}")
+                                    break
+                            else:
+                                # Invite has neither email nor phone; link based on single-use consumption and date_joined
                                 matched_invite = i
                                 match_reason = f"Check 3: Consumed single-use invite #{i['id']} ({i['invitation_pk']})"
                                 logger.info(f"[WEBHOOK_EVENT] -> {match_reason}")
@@ -807,6 +852,30 @@ class InviteService:
                 db.row_factory = aiosqlite.Row
                 async with db.execute("SELECT * FROM tracked_invites WHERE status = 'pending' ORDER BY id DESC") as cursor:
                     pending = await cursor.fetchall()
+
+            if not pending:
+                return 0
+
+            # Mark locally expired invites as 'expired'
+            now_utc = datetime.now(timezone.utc)
+            still_pending = []
+            for inv in pending:
+                exp_str = inv["expires_at"]
+                if exp_str:
+                    try:
+                        exp_dt = datetime.fromisoformat(str(exp_str).replace("Z", "+00:00"))
+                        if exp_dt.tzinfo is None:
+                            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                        if now_utc > exp_dt:
+                            async with aiosqlite.connect(db_path) as db:
+                                await db.execute("UPDATE tracked_invites SET status = 'expired' WHERE id = ?", (inv["id"],))
+                                await db.commit()
+                            logger.info(f"[SYNC_REDEMPTIONS] Marked invite #{inv['id']} ('{inv['name']}') as expired.")
+                            continue
+                    except Exception:
+                        pass
+                still_pending.append(inv)
+            pending = still_pending
 
             if not pending:
                 return 0

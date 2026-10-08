@@ -61,6 +61,11 @@ async def create_or_update_lease(
     current_user: dict = Depends(get_current_user)
 ):
     actor = current_user.get("username", "Admin")
+    matrix = await matrix_service.get_matrix()
+    if not matrix_service.is_group_allowed_for_app(req.group_pk, req.app_pk, matrix):
+        matrix = await matrix_service.get_matrix(force_refresh=True)
+        if not matrix_service.is_group_allowed_for_app(req.group_pk, req.app_pk, matrix):
+            raise HTTPException(status_code=403, detail="Group is not a managed group for this app")
     try:
         return await lease_service.create_or_update_lease(req, actor=actor)
     except Exception as e:
@@ -72,6 +77,11 @@ async def revoke_lease(
     current_user: dict = Depends(get_current_user)
 ):
     actor = current_user.get("username", "Admin")
+    matrix = await matrix_service.get_matrix()
+    if not matrix_service.is_group_allowed_for_app(req.group_pk, req.app_pk, matrix):
+        matrix = await matrix_service.get_matrix(force_refresh=True)
+        if not matrix_service.is_group_allowed_for_app(req.group_pk, req.app_pk, matrix):
+            raise HTTPException(status_code=403, detail="Group is not a managed group for this app")
     success = await lease_service.revoke_lease(req, actor=actor)
     return {"status": "success", "revoked": success}
 

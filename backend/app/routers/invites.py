@@ -20,6 +20,16 @@ async def create_invite(
     current_user: dict = Depends(get_current_user)
 ):
     actor = current_user.get("username", "Admin")
+    if req.group_pks:
+        from app.services.matrix_service import matrix_service
+        matrix = await matrix_service.get_matrix()
+        managed = matrix_service.get_all_managed_group_pks(matrix)
+        req_pks_set = set(map(str, req.group_pks))
+        if not req_pks_set.issubset(managed):
+            matrix = await matrix_service.get_matrix(force_refresh=True)
+            managed = matrix_service.get_all_managed_group_pks(matrix)
+            if not req_pks_set.issubset(managed):
+                raise HTTPException(status_code=403, detail="Invite includes unmanaged groups")
     try:
         return await invite_service.create_invite(req, actor=actor)
     except Exception as e:

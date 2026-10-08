@@ -1,3 +1,4 @@
+import os
 import base64
 import hashlib
 import logging
@@ -20,7 +21,7 @@ from app.models import (
     AutoSetupOidcRequest,
     AutoSetupOidcResponse,
 )
-from app.security import hash_password, verify_password, validate_external_url
+from app.security import hash_password, verify_password, validate_external_url, is_insecure_password
 from app.services.audit_service import audit_service
 
 logger = logging.getLogger("authentik_manager.settings_service")
@@ -30,6 +31,17 @@ class SettingsService:
         # Derive a 32-byte Fernet key from SECRET_KEY
         key_digest = hashlib.sha256(settings.SECRET_KEY.encode()).digest()
         self._fernet = Fernet(base64.urlsafe_b64encode(key_digest))
+
+        # Setup fallback Fernets for seamless secret decryption during SECRET_KEY rotation
+        self._fallback_fernets: List[Fernet] = []
+        for legacy_key in [
+            "changeme-in-production-use-a-strong-secret-key-32chars",
+            "change-this-to-a-random-32-character-secret-key",
+        ]:
+            if legacy_key != settings.SECRET_KEY:
+                leg_digest = hashlib.sha256(legacy_key.encode()).digest()
+                self._fallback_fernets.append(Fernet(base64.urlsafe_b64encode(leg_digest)))
+
         self._app_url: Optional[str] = None
         self._custom_invite_message: Optional[str] = None
         self._notification_webhook_url: Optional[str] = None
@@ -50,23 +62,44 @@ class SettingsService:
             return False
         if self._admin_password_hash:
             return verify_password(candidate, self._admin_password_hash)
+        if is_insecure_password(settings.ADMIN_PASSWORD):
+            return False
         if settings.ADMIN_PASSWORD:
             return verify_password(candidate, settings.ADMIN_PASSWORD)
         return False
+
+    def is_password_configured(self) -> bool:
+        if self._admin_password_hash:
+            return True
+        return bool(settings.ADMIN_PASSWORD and not is_insecure_password(settings.ADMIN_PASSWORD))
 
     def encrypt_secret(self, raw: str) -> str:
         if not raw:
             return ""
         return self._fernet.encrypt(raw.encode("utf-8")).decode("utf-8")
 
-    def decrypt_secret(self, encrypted: str) -> str:
+    def decrypt_secret(self, encrypted: str, key_name: str = "") -> tuple[str, bool]:
+        """
+        Decrypts stored ciphertext. If encrypted with a legacy default key,
+        decrypts successfully and signals that re-encryption is needed.
+        """
         if not encrypted:
-            return ""
+            return "", False
         try:
-            return self._fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
-        except Exception as e:
-            logger.warning(f"Failed to decrypt stored secret: {e}")
-            return ""
+            return self._fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8"), False
+        except Exception:
+            pass
+
+        # Try fallback decryptors
+        for fb in self._fallback_fernets:
+            try:
+                decrypted = fb.decrypt(encrypted.encode("utf-8")).decode("utf-8")
+                return decrypted, True
+            except Exception:
+                continue
+
+        logger.warning(f"Failed to decrypt stored secret for key '{key_name}'.")
+        return "", False
 
     async def load_settings_into_runtime(self):
         """Loads persistent database settings overrides and applies them to runtime config."""
@@ -79,7 +112,11 @@ class SettingsService:
                     if key in ("admin_password_hash", "admin_password"):
                         pass
                     else:
-                        val = self.decrypt_secret(val)
+                        val, needs_reencrypt = self.decrypt_secret(val, key_name=key)
+                        if needs_reencrypt and val:
+                            new_cipher = self.encrypt_secret(val)
+                            await set_app_setting(key, new_cipher, is_secret=True)
+                            logger.info(f"Automatically re-encrypted stored secret '{key}' with active SECRET_KEY.")
 
                 if key == "authentik_url" and val:
                     settings.AUTHENTIK_URL = val
@@ -128,7 +165,7 @@ class SettingsService:
                 elif key == "admin_password_hash" and val:
                     self._admin_password_hash = val
                 elif key == "admin_password" and val:
-                    if not self._admin_password_hash:
+                    if not self._admin_password_hash and not is_insecure_password(val):
                         self._admin_password_hash = hash_password(val)
                     settings.ADMIN_PASSWORD = val
                 elif key == "webhook_secret":
@@ -146,6 +183,43 @@ class SettingsService:
                     settings.OIDC_REDIRECT_URI = val
                 elif key == "oidc_admin_group" and val:
                     settings.OIDC_ADMIN_GROUP = val
+
+            # If no admin password hash is configured, generate or save one
+            if not self._admin_password_hash:
+                configured_pw = (settings.ADMIN_PASSWORD or "").strip()
+                if is_insecure_password(configured_pw):
+                    one_time_pw = secrets.token_urlsafe(16)
+                    hashed = hash_password(one_time_pw)
+                    await set_app_setting("admin_password_hash", hashed, is_secret=True)
+                    self._admin_password_hash = hashed
+                    settings.ADMIN_PASSWORD = one_time_pw
+
+                    data_dir = os.path.dirname(settings.SQLITE_DB_PATH) or "data"
+                    pw_file = os.path.join(data_dir, ".initial_admin_password")
+                    try:
+                        os.makedirs(data_dir, exist_ok=True)
+                        with open(pw_file, "w", encoding="utf-8") as f:
+                            f.write(one_time_pw)
+                        if hasattr(os, "chmod"):
+                            try:
+                                os.chmod(pw_file, 0o600)
+                            except Exception:
+                                pass
+                        logger.warning(
+                            "\n" + "=" * 65 + "\n"
+                            + "SECURITY NOTICE: No custom ADMIN_PASSWORD was configured in environment.\n"
+                            + "A secure random one-time administrator password has been generated:\n"
+                            + f"    PASSWORD: {one_time_pw}\n"
+                            + f"Saved to: {pw_file}\n"
+                            + "Please sign in and change your administrator password in Settings.\n"
+                            + "=" * 65
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not persist initial admin password: {e}")
+                else:
+                    hashed = hash_password(configured_pw)
+                    await set_app_setting("admin_password_hash", hashed, is_secret=True)
+                    self._admin_password_hash = hashed
 
             # Sync whatsapp_service instance
             from app.services.whatsapp_service import whatsapp_service
@@ -210,7 +284,7 @@ class SettingsService:
             default_invite_expiry_days=self._default_invite_expiry_days,
             # OIDC & Security
             auth_method=settings.AUTH_METHOD,
-            admin_password_configured=bool(settings.ADMIN_PASSWORD and settings.ADMIN_PASSWORD != "admin123"),
+            admin_password_configured=self.is_password_configured(),
             webhook_secret_configured=webhook_secret_configured,
             webhook_secret_masked=self._mask_token(webhook_sec) if webhook_secret_configured else "",
             app_url=self._app_url,
@@ -225,6 +299,21 @@ class SettingsService:
 
     async def update_settings(self, req: UpdateSettingsRequest, actor: str = "Admin") -> SettingsResponse:
         updated_keys = []
+
+        # Check if sensitive security parameters are being changed
+        is_security_change = (
+            req.admin_password is not None
+            or req.auth_method is not None
+            or req.authentik_url is not None
+            or (req.authentik_token is not None and not req.authentik_token.startswith("••"))
+        )
+
+        if is_security_change and self.is_password_configured() and settings.AUTH_METHOD == "password":
+            if not req.current_password or not self.verify_admin_password(req.current_password):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Current administrator password is required to change security credentials or authentication method."
+                )
 
         if req.authentik_url is not None:
             clean_url = req.authentik_url.strip().rstrip("/")
@@ -457,6 +546,10 @@ class SettingsService:
             details=f"Updated keys: {', '.join(updated_keys)}",
             status="SUCCESS"
         )
+
+        if any(k in updated_keys for k in ("authentik_url", "authentik_token", "app_group_prefix")):
+            from app.services.matrix_service import matrix_service
+            matrix_service.invalidate_cache()
 
         return await self.get_settings_response()
 

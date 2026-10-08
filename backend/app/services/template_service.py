@@ -163,6 +163,8 @@ class TemplateService:
             status="SUCCESS"
         )
 
+        matrix_service.invalidate_cache()
+
         return {
             "template_name": template["name"],
             "user_pk": req.user_pk,

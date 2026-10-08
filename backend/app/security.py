@@ -4,17 +4,19 @@ import hmac
 import hashlib
 import secrets
 import logging
+import socket
+import ipaddress
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
 logger = logging.getLogger("authentik_manager.security")
 
 # --- Password Hashing (PBKDF2-HMAC-SHA256) ---
 
 def hash_password(password: str) -> str:
-    """Hashes a password with PBKDF2-HMAC-SHA256 and a random 16-byte salt."""
+    """Hashes a password with PBKDF2-HMAC-SHA256 and 600,000 iterations (OWASP standard)."""
     salt = secrets.token_bytes(16)
-    iterations = 100_000
+    iterations = 600_000
     derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
     return f"pbkdf2:sha256:{iterations}${salt.hex()}${derived.hex()}"
 
@@ -45,20 +47,54 @@ def verify_password(plain_password: str, hashed_or_plain: str) -> bool:
 
 DEFAULT_INSECURE_KEYS = {
     "changeme-in-production-use-a-strong-secret-key-32chars",
+    "change-this-to-a-random-32-character-secret-key",
     "secret",
     "admin123",
     "",
 }
 
+PLACEHOLDER_PASSWORDS = {
+    "",
+    "admin123",
+    "admin",
+    "password",
+    "change-this-to-a-secure-password",
+    "your_secure_password",
+}
+
+def is_placeholder_secret_key(key: Optional[str]) -> bool:
+    if not key:
+        return True
+    k = key.strip().lower()
+    return (
+        k in DEFAULT_INSECURE_KEYS
+        or k.startswith("change-this")
+        or k.startswith("changeme")
+        or k.startswith("your_")
+        or len(key.strip()) < 32
+    )
+
+def is_insecure_password(pw: Optional[str]) -> bool:
+    if not pw:
+        return True
+    clean = pw.strip().lower()
+    return (
+        clean in PLACEHOLDER_PASSWORDS
+        or clean.startswith("change-this")
+        or clean.startswith("changeme")
+        or clean.startswith("your_")
+        or len(clean) < 6
+    )
+
 def resolve_secret_key(configured_key: str, data_dir: str = "data") -> str:
     """
     Ensures a cryptographically secure SECRET_KEY is always used:
-    1. If configured_key is provided and not a known default (and >= 32 chars), uses it.
+    1. If configured_key is provided and not a placeholder (and >= 32 chars), uses it.
     2. Otherwise, looks for a persistent key file in data_dir/.secret_key.
     3. If neither exists, generates a secure random 64-char key and writes it to data_dir/.secret_key.
     """
     clean_key = (configured_key or "").strip()
-    if clean_key not in DEFAULT_INSECURE_KEYS and len(clean_key) >= 32:
+    if not is_placeholder_secret_key(clean_key):
         return clean_key
 
     key_file = os.path.join(data_dir, ".secret_key")
@@ -66,7 +102,7 @@ def resolve_secret_key(configured_key: str, data_dir: str = "data") -> str:
         if os.path.exists(key_file):
             with open(key_file, "r", encoding="utf-8") as f:
                 saved = f.read().strip()
-                if len(saved) >= 32:
+                if len(saved) >= 32 and not is_placeholder_secret_key(saved):
                     return saved
     except Exception as e:
         logger.warning(f"Could not read persistent secret key file {key_file}: {e}")
@@ -87,13 +123,12 @@ def resolve_secret_key(configured_key: str, data_dir: str = "data") -> str:
 
 _login_attempts: dict[str, list[float]] = {}
 MAX_LOGIN_ATTEMPTS = 5
-LOGIN_WINDOW_SECONDS = 300 # 5 minutes
+LOGIN_WINDOW_SECONDS = 300  # 5 minutes
 
 def is_login_rate_limited(client_ip: str) -> bool:
     """Checks if client_ip has exceeded max failed login attempts."""
     now = time.time()
     attempts = _login_attempts.get(client_ip, [])
-    # Keep attempts within the active window
     active_attempts = [t for t in attempts if now - t < LOGIN_WINDOW_SECONDS]
     _login_attempts[client_ip] = active_attempts
     return len(active_attempts) >= MAX_LOGIN_ATTEMPTS
@@ -109,35 +144,113 @@ def reset_login_attempts(client_ip: str) -> None:
     """Clears failed login attempts for client_ip upon successful authentication."""
     _login_attempts.pop(client_ip, None)
 
+# --- JWT Token Revocation Registry ---
+
+_revoked_jtis: set[str] = set()
+
+def revoke_jwt_jti(jti: str) -> None:
+    """Marks a JWT unique token identifier as revoked upon logout."""
+    if jti:
+        _revoked_jtis.add(str(jti))
+
+def is_jwt_revoked(jti: str) -> bool:
+    """Checks if a JWT unique token identifier was revoked."""
+    if not jti:
+        return False
+    return str(jti) in _revoked_jtis
+
 # --- SSRF and URL Validation ---
 
-DISALLOWED_HOSTS = {
-    "169.254.169.254",
+METADATA_HOSTNAMES = {
     "metadata.google.internal",
     "instance-data",
+    "169.254.169.254",
     "100.100.100.200",
 }
 
-def validate_external_url(url: str) -> tuple[bool, Optional[str]]:
+def is_forbidden_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Identifies cloud metadata, link-local, multicast, or reserved IP addresses."""
+    # Check link-local (169.254.0.0/16 and fe80::/10)
+    if ip_obj.is_link_local:
+        return True
+    if ip_obj.is_multicast or ip_obj.is_reserved:
+        return True
+    # If IPv4-mapped IPv6 (::ffff:169.254.x.x), inspect mapped IPv4
+    if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
+        if ip_obj.ipv4_mapped.is_link_local or ip_obj.ipv4_mapped.is_reserved:
+            return True
+    if str(ip_obj) in ("100.100.100.200", "169.254.169.254"):
+        return True
+    return False
+
+def parse_ip_candidate(hostname: str) -> Optional[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Tries parsing a hostname as an IPv4, IPv6, integer IP, or hex-octet IP."""
+    # Standard string parse
+    try:
+        return ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+
+    # Decimal or hex integer IP literal (e.g. 2852039166, 0xa9fea9fe)
+    try:
+        val = int(hostname, 0)
+        return ipaddress.ip_address(val)
+    except (ValueError, OverflowError):
+        pass
+
+    # Hex octet notation (e.g. 0xa9.0xfe.0xa9.0xfe)
+    parts = hostname.split(".")
+    if len(parts) == 4 and all(p.startswith("0x") for p in parts):
+        try:
+            octets = bytes([int(p, 16) for p in parts])
+            return ipaddress.IPv4Address(octets)
+        except (ValueError, OverflowError):
+            pass
+
+    return None
+
+def validate_external_url(url: str, allow_loopback: bool = True) -> tuple[bool, Optional[str]]:
     """
     Validates an external URL for SSRF hazards:
     - Must be http:// or https://
-    - Must not target cloud metadata endpoints
+    - Blocks cloud metadata and link-local targets across raw IPs, hex/integer notations, IPv4-mapped IPv6, and DNS resolution.
     """
     if not url or not isinstance(url, str):
         return False, "URL cannot be empty"
 
     try:
-        parsed = urlparse(url.strip())
+        parsed = urlsplit(url.strip())
         if parsed.scheme not in ("http", "https"):
             return False, f"Invalid URL scheme '{parsed.scheme}'. Only http and https are permitted."
 
-        hostname = (parsed.hostname or "").lower()
+        hostname = (parsed.hostname or "").strip().lower().rstrip(".")
         if not hostname:
             return False, "URL must include a valid hostname"
 
-        if hostname in DISALLOWED_HOSTS:
+        if hostname in METADATA_HOSTNAMES or hostname.endswith(".metadata.google.internal"):
             return False, f"Target host '{hostname}' is not permitted."
+
+        # 1. Parse directly if IP literal
+        ip_obj = parse_ip_candidate(hostname)
+        if ip_obj is not None:
+            if is_forbidden_ip(ip_obj):
+                return False, f"Target IP '{ip_obj}' (cloud metadata / link-local) is not permitted."
+            if not allow_loopback and ip_obj.is_loopback:
+                return False, "Target loopback address is not permitted."
+            return True, None
+
+        # 2. Hostname is a domain name: resolve DNS to inspect destination IPs
+        try:
+            addr_info = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            for _, _, _, _, sockaddr in addr_info:
+                ip_str = sockaddr[0]
+                res_ip = ipaddress.ip_address(ip_str)
+                if is_forbidden_ip(res_ip):
+                    return False, f"Target host '{hostname}' resolves to forbidden IP '{res_ip}'."
+                if not allow_loopback and res_ip.is_loopback:
+                    return False, f"Target host '{hostname}' resolves to loopback IP."
+        except socket.gaierror:
+            pass
 
         return True, None
     except Exception as e:
@@ -154,3 +267,12 @@ def sanitize_csv_cell(val: object) -> str:
     if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + s
     return s
+
+def safe_compare(candidate: Optional[str], expected: Optional[str]) -> bool:
+    """Type-safe and timing-safe comparison preventing exceptions on non-ASCII input."""
+    if not candidate or not expected:
+        return False
+    try:
+        return secrets.compare_digest(str(candidate), str(expected))
+    except Exception:
+        return False

@@ -1,10 +1,49 @@
 import os
+import secrets
 import logging
 from typing import Optional, Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from app.security import resolve_secret_key
+from app.security import resolve_secret_key, is_insecure_password, is_placeholder_secret_key
 
 logger = logging.getLogger("authentik_manager.config")
+
+def resolve_bridge_secret(configured_secret: Optional[str], data_dir: str = "data") -> str:
+    """
+    Ensures a dedicated internal shared secret exists for the WhatsApp bridge:
+    1. If configured in environment and not a placeholder, use it.
+    2. Otherwise, read from data/.bridge_secret.
+    3. If neither exists, generates a secure random 64-char key and stores in data/.bridge_secret.
+    Never falls back to SECRET_KEY to prevent bridge compromises from allowing JWT forgery.
+    """
+    clean = (configured_secret or "").strip()
+    if clean and not is_placeholder_secret_key(clean):
+        return clean
+
+    secret_file = os.path.join(data_dir, ".bridge_secret")
+    try:
+        if os.path.exists(secret_file):
+            with open(secret_file, "r", encoding="utf-8") as f:
+                val = f.read().strip()
+                if len(val) >= 32 and not is_placeholder_secret_key(val):
+                    return val
+    except Exception as e:
+        logger.warning(f"Could not read bridge secret file {secret_file}: {e}")
+
+    gen = secrets.token_hex(32)
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        with open(secret_file, "w", encoding="utf-8") as f:
+            f.write(gen)
+        if hasattr(os, "chmod"):
+            try:
+                os.chmod(secret_file, 0o600)
+            except Exception:
+                pass
+        logger.info(f"Generated new secure persistent bridge secret in {secret_file}")
+    except Exception as e:
+        logger.warning(f"Could not persist bridge secret to {secret_file}: {e}")
+
+    return gen
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -15,9 +54,9 @@ class Settings(BaseSettings):
 
     # App Settings
     APP_NAME: str = "Authentik Access Manager"
-    APP_HOST: str = "0.0.0.0"
+    APP_HOST: str = "127.0.0.1"
     APP_PORT: int = 8000
-    SECRET_KEY: str = "changeme-in-production-use-a-strong-secret-key-32chars"
+    SECRET_KEY: str = ""
     SQLITE_DB_PATH: str = "data/manager.db"
     LOG_LEVEL: str = "INFO"
 
@@ -32,7 +71,7 @@ class Settings(BaseSettings):
 
     # Security & Tool Authentication: 'password' (default), 'forward_auth', 'oidc', or 'none' (insecure)
     AUTH_METHOD: Literal["none", "password", "forward_auth", "oidc"] = "password"
-    ADMIN_PASSWORD: str = "admin123"
+    ADMIN_PASSWORD: str = ""
     ALLOW_BREAKGLASS: bool = False
     WEBHOOK_SECRET: Optional[str] = None
     INTERNAL_SERVICE_SECRET: Optional[str] = None
@@ -65,8 +104,8 @@ settings = Settings()
 data_dir = os.path.dirname(settings.SQLITE_DB_PATH) or "data"
 settings.SECRET_KEY = resolve_secret_key(settings.SECRET_KEY, data_dir=data_dir)
 
-if not settings.INTERNAL_SERVICE_SECRET:
-    settings.INTERNAL_SERVICE_SECRET = settings.SECRET_KEY
+# Automatically resolve a dedicated INTERNAL_SERVICE_SECRET for local bridge
+settings.INTERNAL_SERVICE_SECRET = resolve_bridge_secret(settings.INTERNAL_SERVICE_SECRET, data_dir=data_dir)
 
 # Log startup security warnings
 if settings.AUTH_METHOD == "none":
@@ -75,5 +114,5 @@ if settings.AUTH_METHOD == "none":
     logger.warning("Anyone who can access this port has full administrative control.")
     logger.warning("=" * 70)
 
-if settings.ADMIN_PASSWORD == "admin123" and settings.AUTH_METHOD == "password":
-    logger.warning("SECURITY WARNING: ADMIN_PASSWORD is set to the default 'admin123'. Change it in settings!")
+if is_insecure_password(settings.ADMIN_PASSWORD) and settings.AUTH_METHOD == "password":
+    logger.info("ADMIN_PASSWORD is not configured in .env; checking for persistent database credentials...")

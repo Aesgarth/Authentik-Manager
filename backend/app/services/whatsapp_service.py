@@ -8,7 +8,7 @@ class WhatsAppService:
         self.enabled = settings.WHATSAPP_ENABLED
 
     def _get_headers(self) -> Dict[str, str]:
-        secret = getattr(settings, "INTERNAL_SERVICE_SECRET", None) or settings.SECRET_KEY
+        secret = settings.INTERNAL_SERVICE_SECRET or ""
         return {"X-Bridge-Secret": secret}
 
     async def get_status(self) -> Dict[str, Any]:

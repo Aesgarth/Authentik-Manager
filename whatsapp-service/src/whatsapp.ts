@@ -9,6 +9,7 @@ import QRCode from 'qrcode';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
+import { getBridgeSecret } from './secret.js';
 
 export type ConnectionState = 'connecting' | 'qr_ready' | 'connected' | 'disconnected';
 
@@ -141,7 +142,7 @@ export class WhatsAppManager {
             const sender = remoteJid.split('@')[0].split(':')[0];
             try {
               const backendUrl = process.env.BACKEND_INTERNAL_URL || 'http://127.0.0.1:8000';
-              const bridgeSecret = process.env.INTERNAL_SERVICE_SECRET || process.env.SECRET_KEY || '';
+              const bridgeSecret = getBridgeSecret();
               const res = await fetch(`${backendUrl}/api/whatsapp/bot-command`, {
                 method: 'POST',
                 headers: {

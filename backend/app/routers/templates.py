@@ -1,4 +1,5 @@
 from typing import List, Dict, Any
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import get_current_user
 from app.models import (
@@ -8,6 +9,8 @@ from app.models import (
     ApplyAccessTemplateRequest
 )
 from app.services.template_service import template_service
+
+logger = logging.getLogger("authentik_manager.templates")
 
 router = APIRouter(prefix="/api/templates", tags=["Access Templates"])
 
@@ -63,4 +66,5 @@ async def apply_access_template(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        logger.error(f"Error applying template {template_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

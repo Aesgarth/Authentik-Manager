@@ -49,6 +49,26 @@ def is_trusted_proxy(client_ip: str, trusted_list: str) -> bool:
         pass
     return False
 
+def get_client_ip(request: Request) -> str:
+    """
+    Extracts the client IP address. If direct connection is from a trusted proxy,
+    inspects the last entry of X-Forwarded-For. Otherwise returns the direct socket IP.
+    """
+    direct_ip = request.client.host if request.client else ""
+    if not direct_ip:
+        return "127.0.0.1"
+
+    if is_trusted_proxy(direct_ip, settings.FORWARD_AUTH_TRUSTED_PROXIES):
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            parts = [p.strip() for p in xff.split(",") if p.strip()]
+            if parts:
+                candidate = parts[-1]
+                if ":" in candidate and not candidate.startswith("["):
+                    candidate = candidate.split(":")[0]
+                return candidate
+    return direct_ip
+
 async def get_current_user(request: Request) -> Dict[str, Any]:
     """
     Resolves the current authenticated user based on the configured AUTH_METHOD:
@@ -125,6 +145,10 @@ async def get_current_user(request: Request) -> Dict[str, Any]:
     payload = decode_access_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    from app.security import is_jwt_revoked
+    if payload.get("jti") and is_jwt_revoked(payload["jti"]):
+        raise HTTPException(status_code=401, detail="Session has been revoked")
 
     return {
         "username": payload.get("sub", "admin"),

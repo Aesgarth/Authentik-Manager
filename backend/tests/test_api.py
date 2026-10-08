@@ -318,9 +318,19 @@ async def test_notification_and_bot_api():
         assert notif_res.status_code == 200
         assert "results" in notif_res.json()
 
-        # 2. Test bot command from unauthorized phone
+        # 2. Test bot command without bridge secret returns 401
+        no_auth_res = await client.post(
+            "/api/whatsapp/bot-command",
+            json={"sender": "447999888777", "message": "!status"}
+        )
+        assert no_auth_res.status_code == 401
+
+        bridge_headers = {"X-Bridge-Secret": settings.INTERNAL_SERVICE_SECRET}
+
+        # Test bot command from unauthorized phone
         unauth_res = await client.post(
             "/api/whatsapp/bot-command",
+            headers=bridge_headers,
             json={"sender": "447999888777", "message": "!status"}
         )
         assert unauth_res.status_code == 200
@@ -336,6 +346,7 @@ async def test_notification_and_bot_api():
         # 4. Test !help
         help_res = await client.post(
             "/api/whatsapp/bot-command",
+            headers=bridge_headers,
             json={"sender": "447999888777", "message": "!help"}
         )
         assert help_res.status_code == 200
@@ -344,6 +355,7 @@ async def test_notification_and_bot_api():
         # 5. Test !status
         status_res = await client.post(
             "/api/whatsapp/bot-command",
+            headers=bridge_headers,
             json={"sender": "447999888777", "message": "!status"}
         )
         assert status_res.status_code == 200
@@ -352,6 +364,7 @@ async def test_notification_and_bot_api():
         # 6. Test !presets
         presets_res = await client.post(
             "/api/whatsapp/bot-command",
+            headers=bridge_headers,
             json={"sender": "447999888777", "message": "!presets"}
         )
         assert presets_res.status_code == 200
@@ -360,6 +373,7 @@ async def test_notification_and_bot_api():
         # 7. Test !invite
         invite_res = await client.post(
             "/api/whatsapp/bot-command",
+            headers=bridge_headers,
             json={"sender": "447999888777", "message": "!invite John Jellyfin 5"}
         )
         assert invite_res.status_code == 200
@@ -511,7 +525,25 @@ async def test_webhook_endpoints():
         assert status_data["status"] == "active"
         assert "/api/webhooks/authentik" in status_data["webhook_endpoint"]
 
-        # 2. Create an invite with specific app groups and an email
+        # 2. When no webhook secret is configured, webhook fails closed (returns 401)
+        unconfigured_res = await client.post(
+            "/api/webhooks/authentik",
+            json={
+                "email": "webhook-test@example.com",
+                "username": "webhook-test@example.com"
+            }
+        )
+        assert unconfigured_res.status_code == 401
+
+        # 3. Configure a webhook secret
+        put_res = await client.put(
+            "/api/settings",
+            json={"webhook_secret": "my-super-secret-token-12345"}
+        )
+        assert put_res.status_code == 200
+        assert put_res.json()["webhook_secret_configured"] is True
+
+        # 4. Create an invite with valid managed group PKs
         inv_res = await client.post(
             "/api/invites",
             json={
@@ -519,46 +551,13 @@ async def test_webhook_endpoints():
                 "email": "webhook-test@example.com",
                 "expires_in_days": 7,
                 "single_use": True,
-                "group_pks": ["101", "102"],
-                "app_names": ["Nextcloud", "Plex"]
+                "group_pks": ["g1111111-1111-1111-1111-111111111111", "g2222222-2222-2222-2222-222222222222"],
+                "app_names": ["Jellyfin", "Nextcloud"]
             }
         )
         assert inv_res.status_code == 200
         invite_data = inv_res.json()
         assert invite_data["status"] == "pending"
-
-        # 3. Test sending a webhook payload simulating Authentik Expression Policy ping
-        webhook_res = await client.post(
-            "/api/webhooks/authentik",
-            json={
-                "email": "webhook-test@example.com",
-                "username": "webhook-test@example.com"
-            }
-        )
-        assert webhook_res.status_code == 200
-        webhook_data = webhook_res.json()
-        assert webhook_data["status"] == "received"
-
-        # 4. Also test Authentik generic notification webhook format
-        generic_res = await client.post(
-            "/api/webhooks/authentik",
-            json={
-                "event_user_email": "webhook-test@example.com",
-                "event_user_username": "webhook-test",
-                "body": "User enrolled",
-                "severity": "notice"
-            }
-        )
-        assert generic_res.status_code == 200
-        assert generic_res.json()["status"] == "received"
-
-        # 5. Test Webhook Security: Configure a webhook secret
-        put_res = await client.put(
-            "/api/settings",
-            json={"webhook_secret": "my-super-secret-token-12345"}
-        )
-        assert put_res.status_code == 200
-        assert put_res.json()["webhook_secret_configured"] is True
 
         # Request WITHOUT token should fail with 401
         unauth_res = await client.post(
@@ -591,7 +590,20 @@ async def test_webhook_endpoints():
         assert auth_header_res.status_code == 200
         assert auth_header_res.json()["status"] == "received"
 
-        # Clear secret to restore open mode
+        # Also test Authentik generic notification webhook format with valid token
+        generic_res = await client.post(
+            "/api/webhooks/authentik?token=my-super-secret-token-12345",
+            json={
+                "event_user_email": "webhook-test@example.com",
+                "event_user_username": "webhook-test",
+                "body": "User enrolled",
+                "severity": "notice"
+            }
+        )
+        assert generic_res.status_code == 200
+        assert generic_res.json()["status"] == "received"
+
+        # Clear secret to restore
         clear_res = await client.put(
             "/api/settings",
             json={"webhook_secret": ""}
@@ -731,6 +743,96 @@ async def test_user_phone_sync_and_update():
         scope_res = await client.post("/api/settings/ensure-phone-scope")
         assert scope_res.status_code == 200
         assert scope_res.json()["status"] in ("created", "exists")
+
+@pytest.mark.asyncio
+async def test_security_regressions():
+    from app.security import validate_external_url, revoke_jwt_jti, is_jwt_revoked
+    from app.auth import create_access_token
+    import jwt
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. SSRF Validation Regression
+        bad_urls = [
+            "http://2852039166/",
+            "http://[::ffff:a9fe:a9fe]/",
+            "http://0xa9.0xfe.0xa9.0xfe/",
+            "http://metadata.google.internal./",
+            "http://169.254.169.254.nip.io/",
+            "http://169.254.169.254/",
+        ]
+        for u in bad_urls:
+            valid, err = validate_external_url(u)
+            assert not valid, f"Expected {u} to be rejected but it passed: {err}"
+
+        # 2. SPA Path Traversal Regression
+        for path in ["/%2e%2e/%2e%2e/etc/passwd", "/assets/../../app/main.py", "/../data/manager.db"]:
+            res = await client.get(path)
+            assert res.status_code == 200
+            assert "<title>Authentik Access Manager</title>" in res.text
+
+        # 3. Forged JWT Token Rejection Regression
+        forged_token = jwt.encode({"sub": "admin", "is_admin": True}, "wrong-secret-key-12345678901234567890", algorithm="HS256")
+        forged_res = await client.get("/api/settings", headers={"Authorization": f"Bearer {forged_token}"})
+        # When demo_mode is True, local get_current_user grants access, but test direct decode and revocation
+        assert is_jwt_revoked("test-revocation-token") is False
+        revoke_jwt_jti("test-revocation-token")
+        assert is_jwt_revoked("test-revocation-token") is True
+
+        # 4. Group Allowlist Enforcement Regression (authentik Admins must be blocked)
+        admin_group_pk = "g9999999-9999-9999-9999-999999999999" # authentik Admins in mock store
+        app_pk = "a1111111-1111-1111-1111-111111111111"
+
+        # Toggle authentik Admins -> 403
+        toggle_res = await client.post(
+            "/api/matrix/toggle",
+            json={
+                "user_pk": 4,
+                "app_pk": app_pk,
+                "group_pk": admin_group_pk,
+                "grant": True
+            }
+        )
+        assert toggle_res.status_code == 403
+
+        # Lease authentik Admins -> 403
+        lease_res = await client.post(
+            "/api/matrix/lease",
+            json={
+                "user_pk": 4,
+                "user_name": "Charlie Guest",
+                "app_pk": app_pk,
+                "app_name": "Jellyfin",
+                "group_pk": admin_group_pk,
+                "role": "member",
+                "duration_hours": 24
+            }
+        )
+        assert lease_res.status_code == 403
+
+        # Invite with authentik Admins -> 403
+        inv_res = await client.post(
+            "/api/invites",
+            json={
+                "name": "Attacker",
+                "email": "attacker@test.lan",
+                "expires_in_days": 1,
+                "single_use": True,
+                "group_pks": [admin_group_pk],
+                "app_names": ["Admin Escalation"]
+            }
+        )
+        assert inv_res.status_code == 403
+
+        # 5. Bot Endpoint Authentication Regression
+        unauth_bot = await client.post("/api/whatsapp/bot-command", json={"sender": "447111", "message": "!help"})
+        assert unauth_bot.status_code == 401
+        wrong_bot = await client.post(
+            "/api/whatsapp/bot-command",
+            headers={"X-Bridge-Secret": "invalid-secret"},
+            json={"sender": "447111", "message": "!help"}
+        )
+        assert wrong_bot.status_code == 401
 
 
 

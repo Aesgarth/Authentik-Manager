@@ -52,8 +52,21 @@ async def get_auth_status(request: Request):
 async def login_password(req: LoginRequest, request: Request, response: Response):
     client_ip = get_client_ip(request)
 
-    # Rate limiting on failed login attempts
-    if is_login_rate_limited(client_ip):
+    # Check if caller already presents a valid admin session (e.g. re-authentication)
+    has_valid_session = False
+    token = request.cookies.get("session_token")
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+    if token:
+        payload = decode_access_token(token)
+        from app.security import is_jwt_revoked
+        if payload and payload.get("is_admin") and not is_jwt_revoked(payload.get("jti")):
+            has_valid_session = True
+
+    # Rate limiting on failed login attempts (exempts active admin sessions)
+    if not has_valid_session and is_login_rate_limited(client_ip):
         logger.warning(f"Login rate limit exceeded for client IP: {client_ip}")
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -73,6 +86,25 @@ async def login_password(req: LoginRequest, request: Request, response: Response
     # Constant-time password verification against hashed/configured admin credentials
     if not settings_service.verify_admin_password(req.password):
         record_failed_login(client_ip)
+        from app.security import get_failed_attempt_counts, MAX_IP_LOGIN_ATTEMPTS, MAX_GLOBAL_LOGIN_ATTEMPTS
+        ip_count, global_count = get_failed_attempt_counts(client_ip)
+
+        # Dispatch real-time security alert if threshold is reached
+        if ip_count == MAX_IP_LOGIN_ATTEMPTS or global_count == MAX_GLOBAL_LOGIN_ATTEMPTS:
+            try:
+                import asyncio
+                from app.services.notification_service import notification_service
+                asyncio.create_task(
+                    notification_service.send_notification(
+                        title="⚠️ Security Alert: Login Lockout Triggered",
+                        message=f"Multiple failed administrator login attempts detected from IP {client_ip}. Lockout policy active.",
+                        priority="urgent",
+                        tags=["warning", "lock"]
+                    )
+                )
+            except Exception:
+                pass
+
         await audit_service.log(
             actor="unknown",
             action="LOGIN_ATTEMPT",

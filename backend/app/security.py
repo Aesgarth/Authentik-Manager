@@ -138,12 +138,25 @@ MAX_IP_LOGIN_ATTEMPTS = 5
 MAX_GLOBAL_LOGIN_ATTEMPTS = 20
 LOGIN_WINDOW_SECONDS = 300  # 5 minutes
 
+def is_local_admin_ip(client_ip: str) -> bool:
+    """Checks if client_ip is loopback (exempt from global remote DoS lockout)."""
+    if not client_ip:
+        return False
+    if client_ip.lower() in ("127.0.0.1", "::1", "localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(client_ip)
+        return ip.is_loopback
+    except ValueError:
+        return False
+
 def is_login_rate_limited(client_ip: str) -> bool:
     """
     Checks if login attempts are throttled:
     1. Per-IP: checks if client_ip has exceeded MAX_IP_LOGIN_ATTEMPTS (5) in 5 minutes.
     2. Global: checks if total failed attempts across all IPs exceed MAX_GLOBAL_LOGIN_ATTEMPTS (20) in 5 minutes.
        Prevents brute-forcing the single admin password by rotating X-Forwarded-For or client IPs.
+       Localhost / loopback requests are exempt from remote global lockout to prevent denial-of-service against the administrator.
     """
     now = time.time()
 
@@ -154,13 +167,24 @@ def is_login_rate_limited(client_ip: str) -> bool:
     if len(active_ip) >= MAX_IP_LOGIN_ATTEMPTS:
         return True
 
-    # Clean and check global attempts
+    # Loopback / local console access is exempt from global remote DoS lockout
+    if is_local_admin_ip(client_ip):
+        return False
+
+    # Clean and check global attempts for remote clients
     global _global_login_attempts
     _global_login_attempts = [t for t in _global_login_attempts if now - t < LOGIN_WINDOW_SECONDS]
     if len(_global_login_attempts) >= MAX_GLOBAL_LOGIN_ATTEMPTS:
         return True
 
     return False
+
+def get_failed_attempt_counts(client_ip: str) -> tuple[int, int]:
+    """Returns active (per_ip_count, global_count) within the rate limit window."""
+    now = time.time()
+    active_ip = len([t for t in _ip_login_attempts.get(client_ip, []) if now - t < LOGIN_WINDOW_SECONDS])
+    active_global = len([t for t in _global_login_attempts if now - t < LOGIN_WINDOW_SECONDS])
+    return active_ip, active_global
 
 def record_failed_login(client_ip: str) -> None:
     """Records a failed login attempt for both the client_ip and global tracker."""

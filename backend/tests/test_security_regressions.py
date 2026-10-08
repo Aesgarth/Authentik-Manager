@@ -91,8 +91,11 @@ async def test_f1_global_lockout_against_rotating_ips():
     for i in range(20):
         record_failed_login(f"198.51.100.{i}")
 
-    # Now any IP is throttled
+    # Remote IP is throttled
     assert is_login_rate_limited("10.0.0.99") is True
+
+    # Local admin loopback is exempt from global DoS lockout (G1 mitigation)
+    assert is_login_rate_limited("127.0.0.1") is False
 
     # Resetting on successful login clears global lockout
     reset_login_attempts("10.0.0.99")
@@ -294,3 +297,49 @@ async def test_forged_jwt_with_legacy_placeholder_keys():
             )
             res = await client.get("/api/users", headers={"Authorization": f"Bearer {forged_token}"})
             assert res.status_code == 401
+
+@pytest.mark.asyncio
+async def test_g2_outbound_url_protection_and_bridge_secret_leak_prevention():
+    from app.services.whatsapp_service import whatsapp_service
+
+    # 1. Verify WhatsApp bridge secret is NOT leaked to untrusted external hosts
+    whatsapp_service._initial_origin = "127.0.0.1:3001"
+    whatsapp_service.base_url = "http://127.0.0.1:3001"
+    assert "X-Bridge-Secret" in whatsapp_service._get_headers()
+
+    # Changing to external host omits the bridge secret
+    whatsapp_service.base_url = "http://attacker.local:9999"
+    assert "X-Bridge-Secret" not in whatsapp_service._get_headers()
+    whatsapp_service.base_url = "http://127.0.0.1:3001"
+
+    # 2. In password mode, changing outbound URLs without current_password is gated (returns 403)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Log in first
+        await client.post("/api/auth/login", json={"password": "CorrectTestPassword123!"})
+
+        # Changing whatsapp_service_url without password returns 403
+        wa_res = await client.put(
+            "/api/settings",
+            json={"whatsapp_service_url": "http://127.0.0.1:3002"}
+        )
+        assert wa_res.status_code == 403
+        assert "Current administrator password is required" in wa_res.json()["detail"]
+
+        # Changing notification_webhook_url without password returns 403
+        notif_res = await client.put(
+            "/api/settings",
+            json={"notification_webhook_url": "https://discord.com/api/webhooks/test"}
+        )
+        assert notif_res.status_code == 403
+
+        # Changing with current_password succeeds with 200
+        ok_res = await client.put(
+            "/api/settings",
+            json={
+                "whatsapp_service_url": "http://127.0.0.1:3002",
+                "current_password": "CorrectTestPassword123!"
+            }
+        )
+        assert ok_res.status_code == 200
+        assert settings.WHATSAPP_SERVICE_URL == "http://127.0.0.1:3002"

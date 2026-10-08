@@ -2,14 +2,28 @@ import httpx
 from typing import Dict, Any, Optional
 from app.config import settings
 
+from urllib.parse import urlsplit
+
 class WhatsAppService:
     def __init__(self):
         self.base_url = settings.WHATSAPP_SERVICE_URL.rstrip("/")
         self.enabled = settings.WHATSAPP_ENABLED
+        self._initial_origin = self._extract_origin(self.base_url)
+
+    @staticmethod
+    def _extract_origin(url: str) -> str:
+        try:
+            return urlsplit(url).netloc
+        except Exception:
+            return ""
 
     def _get_headers(self) -> Dict[str, str]:
-        secret = settings.INTERNAL_SERVICE_SECRET or ""
-        return {"X-Bridge-Secret": secret}
+        # Defense in depth: only attach internal bridge secret to the configured bridge origin
+        current_origin = self._extract_origin(self.base_url)
+        if current_origin and current_origin == self._initial_origin:
+            secret = settings.INTERNAL_SERVICE_SECRET or ""
+            return {"X-Bridge-Secret": secret}
+        return {}
 
     async def get_status(self) -> Dict[str, Any]:
         if not self.enabled:

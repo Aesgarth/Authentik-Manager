@@ -330,7 +330,52 @@ class SettingsService:
             if clean_token and not clean_token.startswith("••") and clean_token != settings.AUTHENTIK_TOKEN:
                 is_security_change = True
 
-        if is_security_change and self.is_password_configured() and settings.AUTH_METHOD == "password":
+        if req.whatsapp_service_url is not None:
+            clean_wa = req.whatsapp_service_url.strip().rstrip("/")
+            if clean_wa and clean_wa != settings.WHATSAPP_SERVICE_URL.rstrip("/"):
+                is_security_change = True
+
+        if req.notification_webhook_url is not None:
+            clean_nw = req.notification_webhook_url.strip()
+            if clean_nw != (self._notification_webhook_url or ""):
+                is_security_change = True
+
+        if req.telegram_bot_token is not None:
+            clean_tg = req.telegram_bot_token.strip()
+            if clean_tg and not clean_tg.startswith("••") and clean_tg != (self._telegram_bot_token or ""):
+                is_security_change = True
+
+        if req.webhook_secret is not None:
+            clean_ws = req.webhook_secret.strip()
+            if clean_ws and not clean_ws.startswith("••") and clean_ws != (self.get_webhook_secret() or ""):
+                is_security_change = True
+
+        if req.oidc_issuer_url is not None:
+            clean_iss = req.oidc_issuer_url.strip().rstrip("/")
+            if clean_iss and clean_iss != (settings.OIDC_ISSUER_URL or "").rstrip("/"):
+                is_security_change = True
+
+        if req.oidc_client_id is not None:
+            clean_cid = req.oidc_client_id.strip()
+            if clean_cid != (settings.OIDC_CLIENT_ID or ""):
+                is_security_change = True
+
+        if req.oidc_client_secret is not None:
+            clean_cs = req.oidc_client_secret.strip()
+            if clean_cs and not clean_cs.startswith("••") and clean_cs != (settings.OIDC_CLIENT_SECRET or ""):
+                is_security_change = True
+
+        if req.oidc_redirect_uri is not None:
+            clean_red = req.oidc_redirect_uri.strip()
+            if clean_red != (settings.OIDC_REDIRECT_URI or ""):
+                is_security_change = True
+
+        if req.oidc_admin_group is not None:
+            clean_grp = req.oidc_admin_group.strip()
+            if clean_grp != (settings.OIDC_ADMIN_GROUP or "authentik Admins"):
+                is_security_change = True
+
+        if is_security_change and not settings.DEMO_MODE and self.is_password_configured() and settings.AUTH_METHOD == "password":
             if not req.current_password or not self.verify_admin_password(req.current_password):
                 raise HTTPException(
                     status_code=403,
@@ -382,6 +427,8 @@ class SettingsService:
                 raise HTTPException(status_code=400, detail=f"Invalid whatsapp_service_url: {err}")
             await set_app_setting("whatsapp_service_url", clean_wa)
             settings.WHATSAPP_SERVICE_URL = clean_wa
+            from app.services.whatsapp_service import whatsapp_service
+            whatsapp_service._initial_origin = whatsapp_service._extract_origin(clean_wa)
             updated_keys.append("whatsapp_service_url")
 
         if req.default_country_code is not None:

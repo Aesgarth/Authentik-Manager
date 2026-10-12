@@ -146,10 +146,18 @@ class BotService:
                 matched_template = next((t for t in templates if t.id == tid), None)
 
             if not matched_template:
-                # Name match
+                # Exact name match
                 matched_template = next((t for t in templates if t.name.lower() == target.lower()), None)
-                if not matched_template:
-                    matched_template = next((t for t in templates if target.lower() in t.name.lower()), None)
+                if not matched_template and len(target) >= 3:
+                    sub_matches = [t for t in templates if target.lower() in t.name.lower()]
+                    if len(sub_matches) == 1:
+                        matched_template = sub_matches[0]
+                    elif len(sub_matches) > 1:
+                        names_list = ", ".join(f"'{t.name}'" for t in sub_matches)
+                        return (
+                            f"⚠️ Ambiguous preset name: '{target}' matched multiple presets: {names_list}.\n"
+                            "Please specify the full preset name or ID (e.g. `!invite Alice #1`)."
+                        )
 
             group_pks: List[str] = []
             app_names: List[str] = []
@@ -191,10 +199,21 @@ class BotService:
                         None
                     )
                     if not matched_app:
-                        matched_app = next(
-                            (a for a in matrix.apps if req_lower in a.name.lower() or req_lower in a.slug.lower()),
-                            None
-                        )
+                        if len(req_lower) >= 3:
+                            app_subs = [a for a in matrix.apps if req_lower in a.name.lower() or req_lower in a.slug.lower()]
+                            if len(app_subs) == 1:
+                                matched_app = app_subs[0]
+                            elif len(app_subs) > 1:
+                                match_names = ", ".join(f"'{a.name}'" for a in app_subs)
+                                return (
+                                    f"⚠️ Ambiguous application: '{req_app}' matched multiple apps: {match_names}.\n"
+                                    "Please specify the full application name."
+                                )
+                            else:
+                                return f"❌ Could not find application matching '{req_app}'."
+                        else:
+                            return f"❌ Could not find application matching '{req_app}'. Short abbreviations are not permitted."
+
                     if matched_app:
                         gp = matched_app.granular_user_group_pk or matched_app.bound_group_pk
                         if gp and gp not in group_pks:

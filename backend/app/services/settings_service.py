@@ -1,4 +1,5 @@
 import os
+import time
 import base64
 import hashlib
 import logging
@@ -55,6 +56,10 @@ class SettingsService:
         self._default_invite_expiry_days: int = 7
         self._webhook_secret: Optional[str] = None
         self._admin_password_hash: Optional[str] = None
+        self._session_epoch: float = 0.0
+
+    def get_session_epoch(self) -> float:
+        return self._session_epoch
 
     def verify_admin_password(self, candidate: str) -> bool:
         """Constant-time verification of candidate against hashed or configured admin password."""
@@ -183,6 +188,11 @@ class SettingsService:
                     settings.OIDC_REDIRECT_URI = val
                 elif key == "oidc_admin_group" and val:
                     settings.OIDC_ADMIN_GROUP = val
+                elif key == "session_epoch" and val:
+                    try:
+                        self._session_epoch = float(val)
+                    except ValueError:
+                        pass
 
             # If no admin password hash is configured, generate or save one
             if not self._admin_password_hash:
@@ -375,6 +385,35 @@ class SettingsService:
             if clean_grp != (settings.OIDC_ADMIN_GROUP or "authentik Admins"):
                 is_security_change = True
 
+        if req.telegram_admin_chat_ids is not None:
+            clean_tids = req.telegram_admin_chat_ids.strip()
+            if clean_tids != (self._telegram_admin_chat_ids or ""):
+                is_security_change = True
+
+        if req.admin_phone_numbers is not None:
+            clean_phones = req.admin_phone_numbers.strip()
+            if clean_phones != (self._admin_phone_numbers or ""):
+                is_security_change = True
+
+        if req.authentik_insecure_skip_verify is not None:
+            if req.authentik_insecure_skip_verify != settings.AUTHENTIK_INSECURE_SKIP_VERIFY:
+                is_security_change = True
+
+        if req.ntfy_topic is not None:
+            clean_topic = req.ntfy_topic.strip()
+            if clean_topic != (self._ntfy_topic or ""):
+                is_security_change = True
+
+        if req.ntfy_server_url is not None:
+            clean_ntfy = req.ntfy_server_url.strip().rstrip("/")
+            if clean_ntfy and clean_ntfy != (self._ntfy_server_url or "").rstrip("/"):
+                is_security_change = True
+
+        if req.app_url is not None:
+            clean_app_url = req.app_url.strip().rstrip("/")
+            if clean_app_url != (self._app_url or "").rstrip("/"):
+                is_security_change = True
+
         if is_security_change and not settings.DEMO_MODE and self.is_password_configured() and settings.AUTH_METHOD == "password":
             if not req.current_password or not self.verify_admin_password(req.current_password):
                 raise HTTPException(
@@ -382,11 +421,73 @@ class SettingsService:
                     detail="Current administrator password is required to change security credentials or authentication method."
                 )
 
+        # --- Atomic Pre-Validation of all fields before writing to database ---
+        if req.admin_password is not None:
+            clean_pw = req.admin_password.strip()
+            if clean_pw:
+                if len(clean_pw) < 8 or is_insecure_password(clean_pw):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Administrator password must be at least 8 characters and cannot be a common placeholder."
+                    )
+
         if req.authentik_url is not None:
             clean_url = req.authentik_url.strip().rstrip("/")
-            valid, err = validate_external_url(clean_url)
-            if not valid:
-                raise HTTPException(status_code=400, detail=f"Invalid authentik_url: {err}")
+            if clean_url:
+                valid, err = validate_external_url(clean_url)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid authentik_url: {err}")
+
+        if req.whatsapp_service_url is not None:
+            clean_wa = req.whatsapp_service_url.strip().rstrip("/")
+            if clean_wa:
+                valid, err = validate_external_url(clean_wa)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid whatsapp_service_url: {err}")
+
+        if req.notification_webhook_url is not None:
+            clean_nw = req.notification_webhook_url.strip()
+            if clean_nw:
+                valid, err = validate_external_url(clean_nw)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid notification_webhook_url: {err}")
+
+        if req.ntfy_server_url is not None:
+            clean_ntfy = req.ntfy_server_url.strip().rstrip("/")
+            if clean_ntfy:
+                valid, err = validate_external_url(clean_ntfy)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid ntfy_server_url: {err}")
+
+        if req.app_url is not None:
+            clean_app_url = req.app_url.strip().rstrip("/")
+            if clean_app_url:
+                valid, err = validate_external_url(clean_app_url)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid app_url: {err}")
+
+        if req.oidc_issuer_url is not None:
+            clean_iss = req.oidc_issuer_url.strip().rstrip("/")
+            if clean_iss:
+                valid, err = validate_external_url(clean_iss)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid oidc_issuer_url: {err}")
+
+        if req.oidc_redirect_uri is not None:
+            clean_red = req.oidc_redirect_uri.strip()
+            if clean_red:
+                valid, err = validate_external_url(clean_red)
+                if not valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid oidc_redirect_uri: {err}")
+
+        if req.default_lease_duration_hours is not None and req.default_lease_duration_hours <= 0:
+            raise HTTPException(status_code=400, detail="Default lease duration must be greater than 0 hours.")
+
+        if req.default_invite_expiry_days is not None and req.default_invite_expiry_days < 0:
+            raise HTTPException(status_code=400, detail="Default invite expiry days cannot be negative.")
+
+        if req.authentik_url is not None:
+            clean_url = req.authentik_url.strip().rstrip("/")
             await set_app_setting("authentik_url", clean_url)
             settings.AUTHENTIK_URL = clean_url
             updated_keys.append("authentik_url")
@@ -518,6 +619,11 @@ class SettingsService:
                 self._admin_password_hash = hashed
                 settings.ADMIN_PASSWORD = clean_pw
                 updated_keys.append("admin_password")
+
+                # Invalidate all prior active sessions on password change
+                new_epoch = time.time()
+                await set_app_setting("session_epoch", str(new_epoch))
+                self._session_epoch = new_epoch
 
                 # Remove one-time temporary password file if present
                 data_dir = os.path.dirname(settings.SQLITE_DB_PATH) or "data"

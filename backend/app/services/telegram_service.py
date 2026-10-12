@@ -102,6 +102,14 @@ class TelegramService:
                 res = await client.post(url, json=payload)
                 if res.status_code == 200:
                     return True
+                # If markdown entity parsing fails (e.g. underscores in usernames), fallback to plain text
+                if res.status_code == 400 and parse_mode:
+                    logger.info(f"Telegram Markdown parse failed ({res.text}), retrying as plain text...")
+                    payload_plain = payload.copy()
+                    payload_plain.pop("parse_mode", None)
+                    retry_res = await client.post(url, json=payload_plain)
+                    if retry_res.status_code == 200:
+                        return True
                 logger.warning(f"Telegram sendMessage failed (status {res.status_code}): {res.text}")
                 return False
         except Exception as e:

@@ -11,6 +11,7 @@ logger = logging.getLogger("authentik_manager.authentik_client")
 
 class AuthentikClient:
     def __init__(self):
+        self._demo_mode: Optional[bool] = None
         self.mock_applications = []
         self.mock_groups = []
         self.mock_users = []
@@ -21,7 +22,7 @@ class AuthentikClient:
         self.mock_scope_mappings = []
         self.mock_expression_policies = []
         self.mock_events = []
-        if settings.DEMO_MODE:
+        if self.demo_mode:
             self._init_mock_store()
 
     @property
@@ -38,11 +39,13 @@ class AuthentikClient:
 
     @property
     def demo_mode(self) -> bool:
+        if self._demo_mode is not None:
+            return self._demo_mode
         return settings.DEMO_MODE
 
     @demo_mode.setter
     def demo_mode(self, val: bool):
-        settings.DEMO_MODE = val
+        self._demo_mode = val
 
     def _get_headers(self) -> Dict[str, str]:
         return {
@@ -96,21 +99,38 @@ class AuthentikClient:
         """Handles Authentik pagination to retrieve all items."""
         all_results = []
         current_endpoint = endpoint
-        current_params = params or {"page_size": 100}
+        current_params = dict(params or {"page_size": 100})
+        pages_retrieved = 0
+        max_pages = 500
 
-        while current_endpoint:
+        while current_endpoint and pages_retrieved < max_pages:
+            pages_retrieved += 1
             data = await self._request("GET", current_endpoint, params=current_params)
             if isinstance(data, dict) and "results" in data:
                 all_results.extend(data["results"])
-                # Next page URL
-                next_url = data.get("next")
-                if next_url:
-                    # Strip base_url if present
-                    if next_url.startswith(self.base_url):
-                        current_endpoint = next_url[len(self.base_url):]
+
+                # 1. Authentik DRF custom pagination: {"pagination": {"next": 2, "count": ...}}
+                pagination = data.get("pagination")
+                if isinstance(pagination, dict) and pagination.get("next"):
+                    next_page = pagination["next"]
+                    if isinstance(next_page, int) and next_page > 0:
+                        current_params = dict(current_params or {})
+                        current_params["page"] = next_page
+                        continue
+
+                # 2. Top-level next pointer (integer or URL)
+                next_val = data.get("next")
+                if isinstance(next_val, int) and next_val > 0:
+                    current_params = dict(current_params or {})
+                    current_params["page"] = next_val
+                    continue
+                elif isinstance(next_val, str) and next_val:
+                    if next_val.startswith(self.base_url):
+                        current_endpoint = next_val[len(self.base_url):]
                     else:
-                        current_endpoint = next_url
+                        current_endpoint = next_val
                     current_params = None  # query params are already in next URL
+                    continue
                 else:
                     break
             elif isinstance(data, list):
@@ -120,6 +140,7 @@ class AuthentikClient:
                 break
 
         return all_results
+
 
     # ==================== Real API Methods ====================
 

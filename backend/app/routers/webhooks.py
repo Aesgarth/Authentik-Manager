@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import secrets
+import time
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Depends
 from app.auth import get_current_user
@@ -13,6 +14,23 @@ from app.config import settings
 logger = logging.getLogger("authentik_manager.webhooks")
 
 router = APIRouter(prefix="/api/webhooks", tags=["Webhooks"])
+
+_failed_webhook_attempts: Dict[str, list] = {}
+MAX_FAILED_WEBHOOKS_PER_MINUTE = 10
+
+def is_webhook_rate_limited(ip: str) -> bool:
+    now = time.time()
+    attempts = _failed_webhook_attempts.get(ip, [])
+    attempts = [t for t in attempts if now - t < 60]
+    _failed_webhook_attempts[ip] = attempts
+    return len(attempts) >= MAX_FAILED_WEBHOOKS_PER_MINUTE
+
+def record_failed_webhook(ip: str):
+    now = time.time()
+    attempts = _failed_webhook_attempts.get(ip, [])
+    attempts = [t for t in attempts if now - t < 60]
+    attempts.append(now)
+    _failed_webhook_attempts[ip] = attempts
 
 def safe_compare(val: Optional[str], expected: Optional[str]) -> bool:
     if not val or not expected:
@@ -28,7 +46,7 @@ def verify_webhook_token(request: Request) -> bool:
     Requests must provide matching token via:
       1. HTTP Header: X-Webhook-Token: <SECRET> or X-Authentik-Token: <SECRET>
       2. HTTP Header: Authorization: Bearer <SECRET>
-      3. Query param: ?token=<SECRET> or ?secret=<SECRET>
+      3. Query param: ?token=<SECRET> or ?secret=<SECRET> (Deprecated)
     Fails closed if no secret is configured.
     """
     expected_secret = getattr(settings, "WEBHOOK_SECRET", None) or settings_service.get_webhook_secret()
@@ -48,9 +66,14 @@ def verify_webhook_token(request: Request) -> bool:
         if safe_compare(bearer_val, expected_secret):
             return True
 
-    # 3. Query parameter (fallback)
+    # 3. Query parameter (deprecated fallback)
     token_param = request.query_params.get("token") or request.query_params.get("secret")
     if token_param and safe_compare(token_param, expected_secret):
+        logger.warning(
+            "Webhook authenticated via query parameter (?token=). "
+            "Passing secrets in query strings exposes them in server access logs; "
+            "please migrate to the 'X-Webhook-Token' HTTP header."
+        )
         return True
 
     return False
@@ -73,7 +96,7 @@ async def webhook_status(current_user: dict = Depends(get_current_user)):
         "supported_auth_methods": [
             "HTTP Header: X-Webhook-Token: <SECRET>",
             "HTTP Header: Authorization: Bearer <SECRET>",
-            "Query parameter: ?token=<SECRET>",
+            "[DEPRECATED] Query parameter: ?token=<SECRET> (use X-Webhook-Token header instead)",
         ],
         "supported_payloads": [
             "Authentik Generic Notification Transport (event_user_email, event_user_username)",
@@ -89,12 +112,21 @@ async def handle_authentik_webhook(request: Request, background_tasks: Backgroun
     Immediately assigns the pre-selected application groups via Authentik REST API.
     """
     client_ip = request.client.host if request.client else "unknown"
+
+    if is_webhook_rate_limited(client_ip):
+        logger.warning(f"Throttling webhook request from {client_ip}: rate limit exceeded.")
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed webhook authentication requests. Rate limit active."
+        )
+
     provided_token = request.headers.get("X-Webhook-Token") or request.headers.get("Authorization") or request.query_params.get("token")
 
     # Redact URL parameters in logs to avoid logging secret tokens
     logger.info(f"Incoming webhook request from {client_ip} (method={request.method}, path={request.url.path})")
 
     if not verify_webhook_token(request):
+        record_failed_webhook(client_ip)
         masked_token = f"{provided_token[:6]}..." if provided_token and len(provided_token) > 6 else (provided_token or "[NONE]")
         logger.warning(f"Rejected unauthorized webhook request from {client_ip}: provided token='{masked_token}' does not match configured secret.")
         try:
@@ -112,7 +144,7 @@ async def handle_authentik_webhook(request: Request, background_tasks: Backgroun
 
         raise HTTPException(
             status_code=401,
-            detail="Unauthorized webhook request: missing or invalid secret token. Pass via ?token=<SECRET> or X-Webhook-Token header."
+            detail="Unauthorized webhook request: missing or invalid secret token. Pass via X-Webhook-Token header."
         )
 
     try:

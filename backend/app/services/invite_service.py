@@ -145,6 +145,9 @@ def is_valid_human_user(user: Dict[str, Any]) -> bool:
     return True
 
 class InviteService:
+    def __init__(self):
+        self._sync_lock = asyncio.Lock()
+
     async def create_invite(self, req: CreateInviteRequest, actor: str = "Admin") -> TrackedInviteSchema:
         expires_at: Optional[str] = None
         if req.expires_in_days > 0:
@@ -317,8 +320,13 @@ class InviteService:
     async def revoke_invite(self, invitation_pk: str, actor: str = "Admin") -> bool:
         try:
             await authentik_client.delete_invitation(invitation_pk)
-        except Exception:
-            pass
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "404" in err_msg or "not found" in err_msg:
+                logger.info(f"Invitation {invitation_pk} already not found in Authentik, continuing local revocation.")
+            else:
+                logger.error(f"Failed to delete invitation {invitation_pk} in Authentik: {e}")
+                raise RuntimeError(f"Authentik failed to revoke invitation: {e}")
 
         db_path = get_db_path()
         async with aiosqlite.connect(db_path) as db:
@@ -614,11 +622,20 @@ class InviteService:
                                     logger.info(f"[WEBHOOK_EVENT] -> {match_reason}")
                                     break
                             else:
-                                # Invite has neither email nor phone; link based on single-use consumption and date_joined
-                                matched_invite = i
-                                match_reason = f"Check 3: Consumed single-use invite #{i['id']} ({i['invitation_pk']})"
-                                logger.info(f"[WEBHOOK_EVENT] -> {match_reason}")
-                                break
+                                # Invite has neither email nor phone; require explicit user attribute linkage
+                                u_inv_pk = str(u_attrs.get("invitation_pk") or u_attrs.get("invitation") or "").strip()
+                                u_inv_slug = str(u_attrs.get("invitation_slug") or "").strip().lower()
+                                i_slug = str(i["name"] or "").strip().lower()
+                                if u_inv_pk and u_inv_pk == str(i["invitation_pk"]):
+                                    matched_invite = i
+                                    match_reason = f"Check 3: Consumed single-use invite #{i['id']} matching user attribute invitation_pk"
+                                    logger.info(f"[WEBHOOK_EVENT] -> {match_reason}")
+                                    break
+                                elif u_inv_slug and i_slug and u_inv_slug == i_slug:
+                                    matched_invite = i
+                                    match_reason = f"Check 3: Consumed single-use invite #{i['id']} matching user attribute invitation_slug"
+                                    logger.info(f"[WEBHOOK_EVENT] -> {match_reason}")
+                                    break
                 except Exception as e:
                     logger.warning(f"[WEBHOOK_EVENT] Check 3: Failed fetching active invitations: {e}")
 
@@ -669,6 +686,7 @@ class InviteService:
         1. Revokes the misassigned groups from the service account in Authentik.
         2. If the intended human user is now registered in Authentik, assigns the groups to them.
         3. If the human user has not yet registered, resets the invite to 'pending' with redeemed_by=NULL.
+        Note: If the claiming user is a legitimate human user, access is NEVER revoked.
         """
         db_path = get_db_path()
         repaired_count = 0
@@ -676,43 +694,40 @@ class InviteService:
             async with aiosqlite.connect(db_path) as db:
                 db.row_factory = aiosqlite.Row
                 async with db.execute(
-                    """
-                    SELECT * FROM tracked_invites 
-                    WHERE status = 'redeemed' 
-                      AND (
-                        redeemed_by LIKE '%service-%' 
-                        OR redeemed_by LIKE '%whatsapp%' 
-                        OR redeemed_by LIKE '%bot%' 
-                        OR redeemed_by LIKE '%ak-%'
-                      )
-                    """
+                    "SELECT * FROM tracked_invites WHERE status = 'redeemed' AND redeemed_by IS NOT NULL"
                 ) as cursor:
-                    corrupted_invites = await cursor.fetchall()
+                    redeemed_invites = await cursor.fetchall()
 
-            if not corrupted_invites:
+            if not redeemed_invites:
                 return 0
-
-            logger.info(f"Auto-repair: Found {len(corrupted_invites)} misassigned invite(s) claimed by service accounts.")
 
             human_by_email = {str(u.get("email") or "").strip().lower(): u for u in human_users if u.get("email")}
             human_by_username = {str(u.get("username") or "").strip().lower(): u for u in human_users if u.get("username")}
 
-            for inv in corrupted_invites:
+            for inv in redeemed_invites:
                 inv_id = inv["id"]
                 redeemed_by = inv["redeemed_by"] or ""
                 assigned_groups = json.loads(inv["assigned_groups"] or "[]")
                 inv_email = str(inv["email"] or "").strip().lower()
                 inv_name = str(inv["name"] or "").strip()
 
-                # Extract bot PK from redeemed_by string (e.g. "service-whatsapp-bot (#12)")
+                # Extract claiming user PK
                 match = re.search(r'#(\d+)', redeemed_by)
-                bot_pk = int(match.group(1)) if match else None
-                if not bot_pk:
-                    bot_name = redeemed_by.split(" (")[0].strip().lower()
-                    for u in all_users:
-                        if str(u.get("username") or "").strip().lower() == bot_name:
-                            bot_pk = u.get("pk")
-                            break
+                claiming_pk = int(match.group(1)) if match else None
+                claiming_user = None
+                if claiming_pk:
+                    claiming_user = next((u for u in all_users if u.get("pk") == claiming_pk), None)
+                if not claiming_user:
+                    claiming_name = redeemed_by.split(" (")[0].strip().lower()
+                    claiming_user = next((u for u in all_users if str(u.get("username") or "").strip().lower() == claiming_name), None)
+
+                # CRITICAL SECURITY RULE: If the redeeming user is a valid human user, NEVER strip or repair!
+                if claiming_user and is_valid_human_user(claiming_user):
+                    continue
+
+                # If claiming_user is None or identified as non-human (service account/bot):
+                bot_pk = claiming_user.get("pk") if claiming_user else claiming_pk
+                logger.info(f"Auto-repair: Found misassigned invite #{inv_id} claimed by non-human account: '{redeemed_by}'.")
 
                 # Remove misassigned groups from the service account in Authentik
                 if bot_pk and assigned_groups:
@@ -723,7 +738,7 @@ class InviteService:
                         except Exception as e:
                             logger.warning(f"Auto-repair: Could not remove group {g_pk} from bot {bot_pk}: {e}")
 
-                # Locate the intended human user in Authentik
+                # Locate the intended human user in Authentik (exact match only)
                 real_user = None
                 if inv_email and inv_email in human_by_email:
                     real_user = human_by_email[inv_email]
@@ -735,7 +750,7 @@ class InviteService:
                         u_email = str(u.get("email") or "").strip().lower()
                         u_user = str(u.get("username") or "").strip().lower()
                         u_name = str(u.get("name") or "").strip().lower()
-                        if (u_name and inv_lower in u_name) or (u_user and inv_lower in u_user) or (u_email and inv_lower in u_email):
+                        if u_name == inv_lower or u_user == inv_lower or u_email == inv_lower:
                             real_user = u
                             break
 
@@ -794,6 +809,16 @@ class InviteService:
         return repaired_count
 
     async def sync_redemptions(self) -> int:
+        """
+        Public entrypoint with async locking to prevent duplicate concurrent runs.
+        """
+        if self._sync_lock.locked():
+            logger.debug("[SYNC_REDEMPTIONS] Sync already in progress, skipping concurrent run.")
+            return 0
+        async with self._sync_lock:
+            return await self._sync_redemptions_internal()
+
+    async def _sync_redemptions_internal(self) -> int:
         """
         Background & real-time sync: Matches newly created human users in Authentik against pending invites.
         Checks Authentik events ('invitation_used', 'login'), target email, active invitation lifecycle,

@@ -25,6 +25,13 @@ async def toggle_user_active(user_pk: int, current_user: dict = Depends(get_curr
         raise HTTPException(status_code=404, detail="User not found")
 
     new_state = not target_user.get("is_active", True)
+    if not new_state:
+        target_username = str(target_user.get("username") or "").strip().lower()
+        if target_username in ("akadmin", "anonymoususer") or target_user.get("is_superuser"):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Cannot deactivate superuser or root system account '{target_username}'"
+            )
     
     if authentik_client.demo_mode:
         target_user["is_active"] = new_state
@@ -77,9 +84,9 @@ async def update_user_phone(
             """
             UPDATE tracked_invites 
             SET phone = ? 
-            WHERE redeemed_by LIKE ? OR redeemed_by LIKE ?
+            WHERE redeemed_by LIKE ? OR redeemed_by = ?
             """,
-            (phone_clean, f"%#{user_pk}%", f"%User #{user_pk}%")
+            (phone_clean, f"%(#{user_pk})%", f"#{user_pk}")
         )
         await db.commit()
 

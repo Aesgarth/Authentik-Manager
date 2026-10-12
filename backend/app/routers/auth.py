@@ -287,8 +287,15 @@ async def oidc_callback(request: Request, response: Response, code: Optional[str
     logger.info(f"[OIDC Callback] Authenticated user: '{username}', Detected Groups: {user_groups}")
 
     # Check if user is member of required admin group (fail closed)
-    required_group = (settings.OIDC_ADMIN_GROUP or "").strip() or "authentik Admins"
-    if required_group not in user_groups and "authentik Admins" not in user_groups:
+    configured_group = (settings.OIDC_ADMIN_GROUP or "").strip()
+    if configured_group:
+        is_admin = configured_group in user_groups
+        required_group = configured_group
+    else:
+        is_admin = "authentik Admins" in user_groups
+        required_group = "authentik Admins"
+
+    if not is_admin:
         err_msg = f"Access Denied: User '{username}' is not a member of '{required_group}'"
         logger.warning(f"[OIDC Callback] {err_msg}")
         await audit_service.log(

@@ -40,8 +40,14 @@ def verify_password(plain_password: str, hashed_or_plain: str) -> bool:
             logger.warning(f"Error parsing password hash: {e}")
             return False
 
-    # Legacy plaintext fallback (constant-time)
-    return secrets.compare_digest(plain_password, hashed_or_plain)
+    # Legacy plaintext fallback (constant-time, safe against non-ASCII TypeError)
+    try:
+        return secrets.compare_digest(
+            str(plain_password).encode("utf-8"),
+            str(hashed_or_plain).encode("utf-8")
+        )
+    except Exception:
+        return False
 
 # --- Persistent Secret Key Management ---
 
@@ -235,20 +241,30 @@ METADATA_HOSTNAMES = {
     "instance-data",
     "169.254.169.254",
     "100.100.100.200",
+    "fd00:ec2::254",
+    "0.0.0.0",
 }
 
 def is_forbidden_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """Identifies cloud metadata, link-local, multicast, or reserved IP addresses."""
+    """Identifies cloud metadata, link-local, unspecified, multicast, or reserved IP addresses."""
+    # Check unspecified (0.0.0.0 or ::)
+    if ip_obj.is_unspecified:
+        return True
     # Check link-local (169.254.0.0/16 and fe80::/10)
     if ip_obj.is_link_local:
         return True
-    if ip_obj.is_multicast or ip_obj.is_reserved:
+    if ip_obj.is_multicast or (ip_obj.is_reserved and not ip_obj.is_loopback):
         return True
     # If IPv4-mapped IPv6 (::ffff:169.254.x.x), inspect mapped IPv4
     if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
-        if ip_obj.ipv4_mapped.is_link_local or ip_obj.ipv4_mapped.is_reserved:
+        if (
+            ip_obj.ipv4_mapped.is_unspecified
+            or ip_obj.ipv4_mapped.is_link_local
+            or (ip_obj.ipv4_mapped.is_reserved and not ip_obj.ipv4_mapped.is_loopback)
+            or str(ip_obj.ipv4_mapped) in ("100.100.100.200", "169.254.169.254", "0.0.0.0")
+        ):
             return True
-    if str(ip_obj) in ("100.100.100.200", "169.254.169.254"):
+    if str(ip_obj) in ("100.100.100.200", "169.254.169.254", "fd00:ec2::254", "0.0.0.0"):
         return True
     return False
 

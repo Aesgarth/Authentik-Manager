@@ -41,8 +41,11 @@ async def revoke_invite(
     current_user: dict = Depends(get_current_user)
 ):
     actor = current_user.get("username", "Admin")
-    ok = await invite_service.revoke_invite(invitation_pk, actor=actor)
-    return {"status": "revoked" if ok else "failed"}
+    try:
+        ok = await invite_service.revoke_invite(invitation_pk, actor=actor)
+        return {"status": "revoked" if ok else "failed"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/expression-policy")
 async def get_expression_policy_snippet(current_user: dict = Depends(get_current_user)):

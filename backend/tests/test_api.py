@@ -8,7 +8,9 @@ from app.config import settings
 from app.authentik_client import authentik_client
 
 @pytest_asyncio.fixture(autouse=True)
-async def setup_test_db():
+async def setup_test_db(tmp_path):
+    test_db = str(tmp_path / "test_api.db")
+    settings.SQLITE_DB_PATH = test_db
     settings.DEMO_MODE = True
     authentik_client.demo_mode = True
     authentik_client._init_mock_store()

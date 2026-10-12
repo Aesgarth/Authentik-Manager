@@ -24,11 +24,14 @@ from app.auth import create_access_token
 async def setup_test_environment(tmp_path):
     test_db = str(tmp_path / "test_sec.db")
     settings.SQLITE_DB_PATH = test_db
+    authentik_client.demo_mode = True
     authentik_client._init_mock_store()
     settings.DEMO_MODE = False
     settings.AUTH_METHOD = "password"
+    settings.AUTHENTIK_URL = "http://localhost:9000"
     settings.ADMIN_PASSWORD = "CorrectTestPassword123!"
     settings_service._admin_password_hash = None
+    settings_service._session_epoch = 0.0
     
     await init_db()
     from app.security import hash_password
@@ -36,6 +39,7 @@ async def setup_test_environment(tmp_path):
     from app.database import set_app_setting
     await set_app_setting("auth_method", "password")
     await set_app_setting("admin_password_hash", hashed, is_secret=True)
+    await set_app_setting("session_epoch", "0")
     await settings_service.load_settings_into_runtime()
 
     # Reset in-memory trackers before each test
@@ -43,6 +47,8 @@ async def setup_test_environment(tmp_path):
     _ip_login_attempts.clear()
     _global_login_attempts.clear()
     _revoked_jtis.clear()
+    from app.routers.webhooks import _failed_webhook_attempts
+    _failed_webhook_attempts.clear()
 
 @pytest.mark.asyncio
 async def test_f1_login_lockout_and_untrusted_forwarded_for():
@@ -343,3 +349,225 @@ async def test_g2_outbound_url_protection_and_bridge_secret_leak_prevention():
         )
         assert ok_res.status_code == 200
         assert settings.WHATSAPP_SERVICE_URL == "http://127.0.0.1:3002"
+
+@pytest.mark.asyncio
+async def test_authentik_pagination_with_integer_next():
+    # Test _get_all_paginated handles Authentik DRF {"pagination": {"next": 2}} integer page numbers
+    page_responses = {
+        1: {
+            "pagination": {"next": 2, "count": 3},
+            "results": [{"pk": 101, "name": "Item 1"}]
+        },
+        2: {
+            "pagination": {"next": 3, "count": 3},
+            "results": [{"pk": 102, "name": "Item 2"}]
+        },
+        3: {
+            "pagination": {"next": 0, "count": 3},
+            "results": [{"pk": 103, "name": "Item 3"}]
+        }
+    }
+
+    async def mock_request(method, endpoint, params=None):
+        page = (params or {}).get("page", 1)
+        return page_responses.get(page, {"pagination": {"next": 0}, "results": []})
+
+    original_request = authentik_client._request
+    authentik_client._request = mock_request
+    try:
+        items = await authentik_client._get_all_paginated("/api/v3/core/users/")
+        assert len(items) == 3
+        assert [i["pk"] for i in items] == [101, 102, 103]
+    finally:
+        authentik_client._request = original_request
+
+@pytest.mark.asyncio
+async def test_invite_repair_does_not_strip_human_users_with_substring_names():
+    from app.services.invite_service import invite_service
+    import aiosqlite
+    from app.database import get_db_path
+
+    # Human user with substring 'bot' in username/name (e.g. Abbott, Talbot, Botha)
+    human_user = {
+        "pk": 42,
+        "username": "talbot",
+        "name": "Alex Talbot",
+        "email": "talbot@example.com",
+        "type": "internal",
+        "is_active": True
+    }
+    all_users = [human_user]
+    human_users = [human_user]
+
+    # Seed redeemed invite in SQLite
+    db_path = get_db_path()
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            INSERT INTO tracked_invites (
+                invitation_pk, name, email, phone, whatsapp_sent, expires_at, single_use,
+                assigned_groups, assigned_apps, invite_url, status, redeemed_by, created_at
+            ) VALUES ('inv-42', 'Talbot Invite', 'talbot@example.com', '', 0, '', 1,
+                      '["grp-1"]', '["App"]', 'http://invite', 'redeemed', 'talbot (#42)', '2026-10-01T00:00:00Z')
+            """
+        )
+        await db.commit()
+
+    # Run auto-repair
+    repaired = await invite_service._repair_misassigned_invites(human_users, all_users)
+    assert repaired == 0
+
+    # Ensure invite remains redeemed and was NOT stripped/reset
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT status, redeemed_by FROM tracked_invites WHERE invitation_pk = 'inv-42'") as cursor:
+            row = await cursor.fetchone()
+            assert row[0] == "redeemed"
+            assert row[1] == "talbot (#42)"
+
+@pytest.mark.asyncio
+async def test_session_invalidation_on_password_change():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Log in with current password
+        login_res = await client.post("/api/auth/login", json={"password": "CorrectTestPassword123!"})
+        assert login_res.status_code == 200
+
+        # Session token is valid
+        auth_check = await client.get("/api/auth/status")
+        assert auth_check.status_code == 200
+        assert auth_check.json()["authenticated"] is True
+
+        # 2. Change administrator password
+        # Sleep slightly so epoch > token iat
+        time.sleep(0.05)
+        ch_res = await client.put(
+            "/api/settings",
+            json={
+                "admin_password": "NewStrongPassword456!",
+                "current_password": "CorrectTestPassword123!"
+            }
+        )
+        assert ch_res.status_code == 200
+
+        # 3. Old session token must now be rejected with 401 on protected endpoint
+        expired_check = await client.get("/api/users")
+        assert expired_check.status_code == 401
+        assert "Session has expired due to administrator password change" in expired_check.json()["detail"]
+
+        # 4. Login with new password succeeds
+        login_new = await client.post("/api/auth/login", json={"password": "NewStrongPassword456!"})
+        assert login_new.status_code == 200
+
+@pytest.mark.asyncio
+async def test_webhook_rate_limiting_and_query_token_behavior():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Trigger 10 failed webhook requests
+        for _ in range(10):
+            res = await client.post("/api/webhooks/authentik", json={"invalid": "payload"}, headers={"X-Webhook-Token": "wrong-secret"})
+            assert res.status_code == 401
+
+        # 11th request must be throttled with 429
+        throttled = await client.post("/api/webhooks/authentik", json={"invalid": "payload"}, headers={"X-Webhook-Token": "wrong-secret"})
+        assert throttled.status_code == 429
+        assert "Too many failed webhook authentication requests" in throttled.json()["detail"]
+
+@pytest.mark.asyncio
+async def test_prevent_deactivating_superusers():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Authenticate
+        await client.post("/api/auth/login", json={"password": "CorrectTestPassword123!"})
+
+        # 1. User with is_superuser=True (e.g. alex)
+        users = await authentik_client.get_users()
+        superuser = next(u for u in users if u.get("is_superuser"))
+        superuser["is_active"] = True
+        toggle_res = await client.post(f"/api/users/{superuser['pk']}/toggle-active")
+        assert toggle_res.status_code == 403
+        assert "Cannot deactivate superuser" in toggle_res.json()["detail"]
+
+        # 2. User named akadmin
+        akadmin_user = {"pk": 999, "username": "akadmin", "is_superuser": False, "is_active": True}
+        authentik_client.mock_users.append(akadmin_user)
+        toggle_ak = await client.post("/api/users/999/toggle-active")
+        assert toggle_ak.status_code == 403
+        assert "Cannot deactivate superuser" in toggle_ak.json()["detail"]
+
+@pytest.mark.asyncio
+async def test_phone_update_matches_exact_user_pk():
+    import aiosqlite
+    from app.database import get_db_path
+
+    db_path = get_db_path()
+    async with aiosqlite.connect(db_path) as db:
+        # Insert invite for user #1 and user #12
+        await db.execute(
+            """
+            INSERT INTO tracked_invites (
+                invitation_pk, name, email, phone, whatsapp_sent, expires_at, single_use,
+                assigned_groups, assigned_apps, invite_url, status, redeemed_by, created_at
+            ) VALUES ('inv-1', 'User 1', 'u1@ex.com', '', 0, '', 1, '[]', '[]', '', 'redeemed', 'User 1 (#1)', '2026-10-01'),
+                     ('inv-12', 'User 12', 'u12@ex.com', '', 0, '', 1, '[]', '[]', '', 'redeemed', 'User 12 (#12)', '2026-10-01')
+            """
+        )
+        await db.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/api/auth/login", json={"password": "CorrectTestPassword123!"})
+
+        # Update phone for user_pk 1
+        res = await client.patch("/api/users/1/phone", json={"phone": "+441234567890"})
+        assert res.status_code == 200
+
+    # Verify only invite for user #1 was updated, NOT user #12
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT invitation_pk, phone FROM tracked_invites WHERE invitation_pk IN ('inv-1', 'inv-12')") as cursor:
+            rows = dict(await cursor.fetchall())
+            assert rows["inv-1"] == "+441234567890"
+            assert rows["inv-12"] == ""
+
+@pytest.mark.asyncio
+async def test_ssrf_extended_cases_0_0_0_0_and_ipv6_metadata():
+    # 0.0.0.0
+    assert validate_external_url("http://0.0.0.0")[0] is False
+    assert validate_external_url("http://0.0.0.0:8000")[0] is False
+
+    # AWS EC2 IPv6 metadata service
+    assert validate_external_url("http://[fd00:ec2::254]")[0] is False
+    assert validate_external_url("https://[fd00:ec2::254]/latest/meta-data/")[0] is False
+
+@pytest.mark.asyncio
+async def test_ipv6_parsing_in_get_client_ip():
+    from app.auth import get_client_ip
+    from starlette.requests import Request
+
+    # Bracketed IPv6 with port
+    scope1 = {
+        "type": "http",
+        "client": ("127.0.0.1", 12345),
+        "headers": [(b"x-forwarded-for", b"[2001:db8::1]:8080")],
+    }
+    assert get_client_ip(Request(scope1)) == "2001:db8::1"
+
+    # Plain unbracketed IPv6 without port
+    scope2 = {
+        "type": "http",
+        "client": ("127.0.0.1", 12345),
+        "headers": [(b"x-forwarded-for", b"2001:db8::1")],
+    }
+    assert get_client_ip(Request(scope2)) == "2001:db8::1"
+
+@pytest.mark.asyncio
+async def test_bot_ambiguous_matching_rejected():
+    from app.services.bot_service import bot_service
+
+    # Single character 'p' is rejected for ambiguous app matching
+    res = await bot_service.handle_invite(
+        sender="447123456789",
+        tokens=["!invite", "Bob", "p", "7"],
+        channel="whatsapp"
+    )
+    assert "Short abbreviations are not permitted" in res or "Could not find" in res or "Ambiguous" in res
+

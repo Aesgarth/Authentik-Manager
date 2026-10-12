@@ -64,7 +64,9 @@ def get_client_ip(request: Request) -> str:
             parts = [p.strip() for p in xff.split(",") if p.strip()]
             if parts:
                 candidate = parts[-1]
-                if ":" in candidate and not candidate.startswith("["):
+                if candidate.startswith("[") and "]" in candidate:
+                    candidate = candidate.split("]")[0].lstrip("[")
+                elif candidate.count(":") == 1:
                     candidate = candidate.split(":")[0]
                 return candidate
     return direct_ip
@@ -115,8 +117,14 @@ async def get_current_user(request: Request) -> Dict[str, Any]:
         groups_header = request.headers.get(settings.FORWARD_AUTH_HEADER_GROUPS.lower(), "")
         groups = [g.strip() for g in groups_header.split(",") if g.strip()]
         
-        required_group = settings.OIDC_ADMIN_GROUP or "authentik Admins"
-        is_admin = (required_group in groups) or ("authentik Admins" in groups)
+        configured_admin_group = (settings.OIDC_ADMIN_GROUP or "").strip()
+        if configured_admin_group:
+            is_admin = configured_admin_group in groups
+            required_group = configured_admin_group
+        else:
+            is_admin = "authentik Admins" in groups
+            required_group = "authentik Admins"
+
         if not is_admin:
             logger.warning(f"Forward-auth user '{username}' denied: not in required admin group '{required_group}'")
             raise HTTPException(
@@ -149,6 +157,15 @@ async def get_current_user(request: Request) -> Dict[str, Any]:
     from app.security import is_jwt_revoked
     if payload.get("jti") and is_jwt_revoked(payload["jti"]):
         raise HTTPException(status_code=401, detail="Session has been revoked")
+
+    from app.services.settings_service import settings_service
+    epoch = settings_service.get_session_epoch()
+    iat = payload.get("iat", 0)
+    if epoch > 0 and iat and iat < epoch:
+        raise HTTPException(
+            status_code=401,
+            detail="Session has expired due to administrator password change. Please log in again."
+        )
 
     return {
         "username": payload.get("sub", "admin"),

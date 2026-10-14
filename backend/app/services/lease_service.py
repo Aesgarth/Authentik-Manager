@@ -84,6 +84,77 @@ class LeaseService:
         matrix_service.invalidate_cache()
         return success
 
+    async def get_active_leases(self) -> List[ExpiringGrantSchema]:
+        now_utc = datetime.now(timezone.utc)
+        active = await get_active_expiring_grants()
+        results = []
+        for g in active:
+            try:
+                dt = datetime.fromisoformat(g["expires_at"].replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if dt.astimezone(timezone.utc) > now_utc:
+                    results.append(ExpiringGrantSchema(**g))
+            except Exception:
+                results.append(ExpiringGrantSchema(**g))
+        results.sort(key=lambda x: x.expires_at)
+        return results
+
+    async def extend_lease(
+        self,
+        user_pk: int,
+        app_pk: str,
+        group_pk: str,
+        additional_hours: int,
+        actor: str = "Admin"
+    ) -> ExpiringGrantSchema:
+        if additional_hours <= 0 or additional_hours > 87600:
+            raise ValueError("additional_hours must be between 1 and 87600.")
+
+        active = await get_active_expiring_grants()
+        target = next(
+            (g for g in active if g["user_pk"] == user_pk and g["app_pk"] == app_pk and g["group_pk"] == group_pk),
+            None
+        )
+        if not target:
+            raise ValueError("Active lease not found or already revoked.")
+
+        now = datetime.now(timezone.utc)
+        try:
+            curr_dt = datetime.fromisoformat(target["expires_at"].replace("Z", "+00:00"))
+            if curr_dt.tzinfo is None:
+                curr_dt = curr_dt.replace(tzinfo=timezone.utc)
+            base_dt = max(now, curr_dt.astimezone(timezone.utc))
+        except Exception:
+            base_dt = now
+
+        new_expires_at = (base_dt + timedelta(hours=additional_hours)).isoformat()
+
+        grant_dict = await save_expiring_grant(
+            user_pk=user_pk,
+            user_name=target["user_name"],
+            app_pk=app_pk,
+            app_name=target["app_name"],
+            group_pk=group_pk,
+            role=target["role"],
+            expires_at=new_expires_at
+        )
+
+        await record_audit_log(
+            actor=actor,
+            action="EXTEND_TEMPORARY_ACCESS",
+            target_type="EXPIRING_GRANT",
+            target_name=f"{target['user_name']} on {target['app_name']}",
+            target_id=str(user_pk),
+            details=f"Extended {target['role'].upper()} lease by {additional_hours}h to {new_expires_at}",
+            status="SUCCESS"
+        )
+
+        from app.services.matrix_service import matrix_service
+        matrix_service.invalidate_cache()
+
+        return ExpiringGrantSchema(**grant_dict)
+
     async def get_active_leases_map(self) -> Dict[str, Dict[str, ExpiringGrantSchema]]:
         active = await get_active_expiring_grants()
         result: Dict[str, Dict[str, ExpiringGrantSchema]] = {}

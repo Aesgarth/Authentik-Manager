@@ -28,6 +28,11 @@ class MatrixService:
     def invalidate_cache(self):
         self._cached_matrix = None
         self._cached_at = 0.0
+        try:
+            from app.routers.health import invalidate_health_cache
+            invalidate_health_cache()
+        except Exception:
+            pass
 
     def is_group_allowed_for_app(self, group_pk: str, app_pk: str, matrix: AccessMatrixResponse) -> bool:
         """

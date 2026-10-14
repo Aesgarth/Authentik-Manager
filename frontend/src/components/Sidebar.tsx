@@ -13,7 +13,8 @@ import {
   Settings,
   Menu,
   X,
-  Bot
+  Bot,
+  Clock
 } from 'lucide-react';
 import { HealthStatus, AuthStatus, WhatsAppStatus } from '../types';
 
@@ -21,8 +22,8 @@ interface SidebarProps {
   health: HealthStatus | null;
   auth: AuthStatus | null;
   whatsAppStatus: WhatsAppStatus | null;
-  activeTab: 'matrix' | 'invites' | 'audit' | 'settings';
-  setActiveTab: (tab: 'matrix' | 'invites' | 'audit' | 'settings') => void;
+  activeTab: 'matrix' | 'invites' | 'leases' | 'audit' | 'settings';
+  setActiveTab: (tab: 'matrix' | 'invites' | 'leases' | 'audit' | 'settings') => void;
   stagedMode: boolean;
   setStagedMode: (val: boolean) => void;
   onRefresh: () => void;
@@ -187,7 +188,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   )}
                 </button>
 
-                {/* 3. Audit Log */}
+                {/* 3. Active Leases & Temporary Access */}
+                <button
+                  onClick={() => {
+                    setActiveTab('leases');
+                    closeMobile();
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                    activeTab === 'leases'
+                      ? 'bg-[#1e2c3f] text-white border border-[#2c3f58] shadow-sm font-semibold'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-[#16202e]'
+                  }`}
+                >
+                  <div className="flex items-center space-x-3">
+                    <Clock className={`h-4 w-4 ${activeTab === 'leases' ? 'text-[#fd7e14]' : 'text-slate-400'}`} />
+                    <span>Active Leases</span>
+                  </div>
+                  {health && health.active_leases_count > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                      {health.active_leases_count}
+                    </span>
+                  )}
+                </button>
+
+                {/* 4. Audit Log */}
                 <button
                   onClick={() => {
                     setActiveTab('audit');

@@ -10,7 +10,8 @@ import {
   User, 
   Application,
   WhatsAppStatus,
-  AccessTemplate
+  AccessTemplate,
+  ExpiringGrant
 } from './types';
 import { Sidebar } from './components/Sidebar';
 import { OverviewCards } from './components/OverviewCards';
@@ -24,6 +25,7 @@ import { FlowGuideModal } from './components/FlowGuideModal';
 import { WhatsAppModal } from './components/WhatsAppModal';
 import { TemplateModal } from './components/TemplateModal';
 import { SettingsPanel } from './components/SettingsPanel';
+import { ActiveLeasesManager } from './components/ActiveLeasesManager';
 import { Lock, AlertCircle, CheckCircle, ShieldCheck, Sparkles, ArrowRight, ShieldAlert, RefreshCw } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -32,10 +34,11 @@ export const App: React.FC = () => {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [whatsAppStatus, setWhatsAppStatus] = useState<WhatsAppStatus | null>(null);
   const [invites, setInvites] = useState<TrackedInvite[]>([]);
+  const [leases, setLeases] = useState<ExpiringGrant[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [flowGuide, setFlowGuide] = useState<{ title: string; description: string; snippet: string } | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'matrix' | 'invites' | 'audit' | 'settings'>('matrix');
+  const [activeTab, setActiveTab] = useState<'matrix' | 'invites' | 'leases' | 'audit' | 'settings'>('matrix');
   const [stagedMode, setStagedMode] = useState<boolean>(false);
   const [stagedChanges, setStagedChanges] = useState<StagedChange[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -83,13 +86,14 @@ export const App: React.FC = () => {
       }
 
       // 2. Fetch authenticated dashboard resources
-      const [matrix, invs, logs, guide, wa, tmpls] = await Promise.all([
+      const [matrix, invs, logs, guide, wa, tmpls, ls] = await Promise.all([
         api.getMatrix(),
         api.getInvites(),
         api.getAuditLogs(50),
         api.getExpressionPolicySnippet(),
         api.getWhatsAppStatus().catch(() => null),
         api.getTemplates().catch(() => []),
+        api.getActiveLeases().catch(() => []),
       ]);
       setMatrixData(matrix);
       setInvites(invs);
@@ -97,6 +101,7 @@ export const App: React.FC = () => {
       setFlowGuide(guide);
       if (wa) setWhatsAppStatus(wa);
       if (tmpls) setTemplates(tmpls);
+      if (ls) setLeases(ls);
     } catch (err: any) {
       console.error('Failed to load data:', err);
       const isAuthErr = err.message?.includes('Authentication required') || err.message?.includes('401');
@@ -378,6 +383,58 @@ export const App: React.FC = () => {
       await loadData();
     } catch (err: any) {
       showToast(err.message || 'Failed to apply preset', 'error');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Active Leases Handlers
+  const handleExtendLease = async (params: { user_pk: number; app_pk: string; group_pk: string; additional_hours: number }) => {
+    try {
+      setLoading(true);
+      await api.extendLease(params);
+      showToast(`Extended lease by +${params.additional_hours}h`, 'success');
+      await loadData();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to extend lease', 'error');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRevokeLease = async (user_pk: number, app_pk: string, group_pk: string) => {
+    try {
+      setLoading(true);
+      await api.revokeLease(user_pk, app_pk, group_pk);
+      showToast('Temporary lease revoked', 'success');
+      await loadData();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to revoke lease', 'error');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateLease = async (params: {
+    user_pk: number;
+    user_name: string;
+    app_pk: string;
+    app_name: string;
+    group_pk: string;
+    role: 'member' | 'admin';
+    duration_hours?: number;
+    expires_at?: string;
+  }) => {
+    try {
+      setLoading(true);
+      await api.createLease(params);
+      showToast(`Granted temporary ${params.role.toUpperCase()} lease on ${params.app_name}!`, 'success');
+      await loadData();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to grant lease', 'error');
       throw err;
     } finally {
       setLoading(false);
@@ -766,6 +823,7 @@ export const App: React.FC = () => {
                   health={health}
                   onOpenProvisionModal={() => setIsProvisionModalOpen(true)}
                   onOpenInviteList={() => setActiveTab('invites')}
+                  onOpenLeases={() => setActiveTab('leases')}
                 />
 
                 <SecurityBanner
@@ -800,6 +858,19 @@ export const App: React.FC = () => {
                 onRevokeInvite={handleRevokeInvite}
                 onSyncRedemptions={handleSyncRedemptions}
                 onOpenGuide={() => setIsGuideModalOpen(true)}
+                loading={loading}
+              />
+            )}
+
+            {activeTab === 'leases' && (
+              <ActiveLeasesManager
+                leases={leases}
+                users={matrixData?.users || []}
+                apps={matrixData?.apps || []}
+                onRefresh={loadData}
+                onExtendLease={handleExtendLease}
+                onRevokeLease={handleRevokeLease}
+                onCreateLease={handleCreateLease}
                 loading={loading}
               />
             )}

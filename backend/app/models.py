@@ -83,6 +83,12 @@ class RevokeExpiringGrantRequest(BaseModel):
     app_pk: str
     group_pk: str
 
+class ExtendExpiringGrantRequest(BaseModel):
+    user_pk: int
+    app_pk: str
+    group_pk: str
+    additional_hours: int = 24
+
 # --- Access Templates / Personas Models ---
 
 class AccessTemplateSchema(BaseModel):
@@ -243,6 +249,7 @@ class HealthResponse(BaseModel):
     total_apps: int
     unprotected_apps_count: int
     active_invites_count: int
+    active_leases_count: int = 0
 
 # --- Settings & Admin Panel Models ---
 

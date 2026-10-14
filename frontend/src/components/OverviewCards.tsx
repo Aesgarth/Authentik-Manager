@@ -1,17 +1,19 @@
 import React from 'react';
-import { Users, Server, ShieldAlert, ShieldCheck, Mail, Sliders } from 'lucide-react';
+import { Users, Server, ShieldAlert, ShieldCheck, Mail, Sliders, Clock } from 'lucide-react';
 import { HealthStatus } from '../types';
 
 interface OverviewCardsProps {
   health: HealthStatus | null;
   onOpenProvisionModal: () => void;
   onOpenInviteList: () => void;
+  onOpenLeases?: () => void;
 }
 
 export const OverviewCards: React.FC<OverviewCardsProps> = ({
   health,
   onOpenProvisionModal,
   onOpenInviteList,
+  onOpenLeases,
 }) => {
   if (!health) return null;
 
@@ -42,6 +44,18 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
             <strong className="text-white font-semibold">{health.active_invites_count}</strong> Pending Invites
           </span>
         </button>
+
+        {health.active_leases_count > 0 && onOpenLeases && (
+          <button
+            onClick={onOpenLeases}
+            className="flex items-center gap-2 text-slate-300 hover:text-white transition-colors"
+          >
+            <Clock className="h-4 w-4 text-cyan-400" />
+            <span>
+              <strong className="text-white font-semibold">{health.active_leases_count}</strong> Active Leases
+            </span>
+          </button>
+        )}
 
         <div className="flex items-center gap-1.5 text-[11px]">
           {health.unprotected_apps_count > 0 ? (

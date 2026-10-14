@@ -119,6 +119,7 @@ export interface HealthStatus {
   total_apps: number;
   unprotected_apps_count: number;
   active_invites_count: number;
+  active_leases_count: number;
 }
 
 export interface AuthStatus {

@@ -14,6 +14,8 @@ async def setup_test_db(tmp_path):
     settings.DEMO_MODE = True
     authentik_client.demo_mode = True
     authentik_client._init_mock_store()
+    from app.routers.health import invalidate_health_cache
+    invalidate_health_cache()
     await init_db()
 
 @pytest.mark.asyncio
@@ -177,6 +179,34 @@ async def test_expiring_grants():
         assert grant_data["user_pk"] == 4
         assert grant_data["role"] == "member"
         assert grant_data["expires_at"] is not None
+
+        # Verify active leases list endpoint GET /api/matrix/leases
+        leases_res = await client.get("/api/matrix/leases")
+        assert leases_res.status_code == 200
+        leases_list = leases_res.json()
+        assert len(leases_list) >= 1
+        found_lease = next((l for l in leases_list if l["user_pk"] == 4 and l["app_pk"] == "a1111111-1111-1111-1111-111111111111"), None)
+        assert found_lease is not None
+
+        # Verify health endpoint includes active_leases_count
+        health_res = await client.get("/api/health")
+        assert health_res.status_code == 200
+        assert health_res.json()["active_leases_count"] >= 1
+
+        # Test extend lease POST /api/matrix/leases/extend
+        orig_expires = grant_data["expires_at"]
+        extend_res = await client.post(
+            "/api/matrix/leases/extend",
+            json={
+                "user_pk": 4,
+                "app_pk": "a1111111-1111-1111-1111-111111111111",
+                "group_pk": "g1111111-1111-1111-1111-111111111111",
+                "additional_hours": 48
+            }
+        )
+        assert extend_res.status_code == 200
+        extended_data = extend_res.json()
+        assert extended_data["expires_at"] > orig_expires
 
         # Verify matrix includes active lease
         matrix = (await client.get("/api/matrix")).json()

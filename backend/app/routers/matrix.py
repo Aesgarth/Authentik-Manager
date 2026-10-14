@@ -10,6 +10,7 @@ from app.models import (
     BulkToggleRequest,
     CreateExpiringGrantRequest,
     RevokeExpiringGrantRequest,
+    ExtendExpiringGrantRequest,
     ExpiringGrantSchema,
 )
 from app.services.matrix_service import matrix_service
@@ -84,6 +85,36 @@ async def revoke_lease(
             raise HTTPException(status_code=403, detail="Group is not a managed group for this app")
     success = await lease_service.revoke_lease(req, actor=actor)
     return {"status": "success", "revoked": success}
+
+@router.get("/leases", response_model=list[ExpiringGrantSchema])
+async def get_active_leases(
+    current_user: dict = Depends(get_current_user)
+):
+    return await lease_service.get_active_leases()
+
+@router.post("/leases/extend", response_model=ExpiringGrantSchema)
+async def extend_lease(
+    req: ExtendExpiringGrantRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    actor = current_user.get("username", "Admin")
+    matrix = await matrix_service.get_matrix()
+    if not matrix_service.is_group_allowed_for_app(req.group_pk, req.app_pk, matrix):
+        matrix = await matrix_service.get_matrix(force_refresh=True)
+        if not matrix_service.is_group_allowed_for_app(req.group_pk, req.app_pk, matrix):
+            raise HTTPException(status_code=403, detail="Group is not a managed group for this app")
+    try:
+        return await lease_service.extend_lease(
+            user_pk=req.user_pk,
+            app_pk=req.app_pk,
+            group_pk=req.group_pk,
+            additional_hours=req.additional_hours,
+            actor=actor
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/export/csv")
 async def export_matrix_csv(current_user: dict = Depends(get_current_user)):

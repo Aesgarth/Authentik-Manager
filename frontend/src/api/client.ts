@@ -249,6 +249,30 @@ export const api = {
     if (!res.ok) throw new Error('Failed to revoke temporary lease');
   },
 
+  async getActiveLeases(): Promise<ExpiringGrant[]> {
+    const res = await fetch(`${API_BASE}/matrix/leases`);
+    if (!res.ok) throw new Error('Failed to fetch active leases');
+    return res.json();
+  },
+
+  async extendLease(params: {
+    user_pk: number;
+    app_pk: string;
+    group_pk: string;
+    additional_hours: number;
+  }): Promise<ExpiringGrant> {
+    const res = await fetch(`${API_BASE}/matrix/leases/extend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to extend lease' }));
+      throw new Error(err.detail || 'Failed to extend lease');
+    }
+    return res.json();
+  },
+
   async getTemplates(): Promise<AccessTemplate[]> {
     const res = await fetch(`${API_BASE}/templates`);
     if (!res.ok) throw new Error('Failed to fetch access templates');

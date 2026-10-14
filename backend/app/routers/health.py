@@ -6,6 +6,7 @@ from app.models import HealthResponse
 from app.authentik_client import authentik_client
 from app.services.matrix_service import matrix_service
 from app.services.invite_service import invite_service
+from app.services.lease_service import lease_service
 from app.auth import get_current_user
 
 router = APIRouter(prefix="/api/health", tags=["Health & Stats"])
@@ -13,6 +14,10 @@ router = APIRouter(prefix="/api/health", tags=["Health & Stats"])
 _last_health_cache: Optional[HealthResponse] = None
 _last_health_time: float = 0.0
 HEALTH_CACHE_TTL = 30.0  # seconds
+
+def invalidate_health_cache():
+    global _last_health_cache
+    _last_health_cache = None
 
 @router.get("", response_model=HealthResponse)
 async def get_health(request: Request):
@@ -41,6 +46,7 @@ async def get_health(request: Request):
             total_apps=0,
             unprotected_apps_count=0,
             active_invites_count=0,
+            active_leases_count=0,
         )
 
     # For authenticated users, serve from TTL cache to avoid hammering Authentik
@@ -66,6 +72,12 @@ async def get_health(request: Request):
     except Exception:
         active_invites = 0
 
+    try:
+        active_leases = await lease_service.get_active_leases()
+        active_leases_count = len(active_leases)
+    except Exception:
+        active_leases_count = 0
+
     resp = HealthResponse(
         status="healthy" if is_connected else "degraded",
         authentik_connected=is_connected,
@@ -77,6 +89,7 @@ async def get_health(request: Request):
         total_apps=total_apps,
         unprotected_apps_count=unprotected_count,
         active_invites_count=active_invites,
+        active_leases_count=active_leases_count,
     )
 
     _last_health_cache = resp
